@@ -8,20 +8,24 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"strings"
 	"time"
 )
 
 // --- 1. THE BRAIN (Global State) ---
 type ProxyConfig struct {
-	LagTime   int // In milliseconds
-	ErrorRate int // Percentage (0-100)
+    // --- Category 1: Network & Timing ---
+    LagTime    int // Base delay (ms)
+    JitterTime int // Random extra delay (±ms)
+    
+    // --- Category 2: HTTP Protocol ---
+    ErrorRate       int    // Percentage (0-100)
 }
 
-// Initialize with defaults (No chaos)
+// Set defaults
 var config = ProxyConfig{
-	LagTime:   0,
-	ErrorRate: 0,
+    LagTime:      0,
+    JitterTime:   0,
+    ErrorRate:    0,
 }
 
 // --- 2. THE REMOTE CONTROL (Admin API Handler) ---
@@ -50,7 +54,7 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	config = newConfig
-	fmt.Printf("Config Updated: Lag=%dms, Errors=%d%%\n", config.LagTime, config.ErrorRate)
+	fmt.Printf("Config Updated: Lag=%dms, Jitter=%dms, Errors=%d%%\n", config.LagTime, config.JitterTime, config.ErrorRate)
 
 	// Send back the new state
 	w.Header().Set("Content-Type", "application/json")
@@ -81,40 +85,57 @@ func main() {
 	// A. REQUEST INTERCEPTOR (The "Director")
 	// Handles: Latency, Host Header Fixing
 	proxy.Director = func(req *http.Request) {
-		originalDirector(req)
+        originalDirector(req)
+        req.Host = req.URL.Host
 
-		// Fix the Host header so localhost:3000 accepts the connection
-		req.Host = "localhost:3000"
-		req.URL.Scheme = "http"
-		req.URL.Host = "localhost:3000"
+        // --- CATEGORY 1: TIMING ---
+        delay := 0
+        
+        // 1. Base Latency
+        if config.LagTime > 0 {
+            delay += config.LagTime
+        }
 
-		// Dynamic Lag Injection
-		if config.LagTime > 0 {
-			// fmt.Printf("Sleeping for %dms...\n", config.LagTime) // Optional logging
-			time.Sleep(time.Duration(config.LagTime) * time.Millisecond)
-		}
-	}
+        // 2. Jitter (Randomness)
+        if config.JitterTime > 0 {
+            // Adds a random amount between 0 and JitterTime
+            delay += rand.Intn(config.JitterTime)
+        }
+
+        // Apply the total sleep
+        if delay > 0 {
+            // fmt.Printf("⏳ Lagging for %dms\n", delay) // Uncomment to debug
+            time.Sleep(time.Duration(delay) * time.Millisecond)
+        }
+    }
 
 	// B. RESPONSE INTERCEPTOR (The "Modifier")
 	// Handles: 500 Errors, Data Corruption
 	proxy.ModifyResponse = func(resp *http.Response) error {
-		path := resp.Request.URL.Path
+		
+		// path := resp.Request.URL.Path
 
 		// Filter: Don't break static files (JS, CSS, Images)
 		// We only want to break API calls or the main document
-		isStatic := false
-		if strings.HasSuffix(path, ".js") || strings.HasSuffix(path, ".css") || strings.HasSuffix(path, ".png") {
-			isStatic = true
-		}
+		// isStatic := false
+		// if strings.HasSuffix(path, ".js") || strings.HasSuffix(path, ".css") || strings.HasSuffix(path, ".png") {
+		// 	isStatic = true
+		// }
 
-		// Dynamic Error Injection
-		if !isStatic && config.ErrorRate > 0 {
-			if rand.Intn(100) < config.ErrorRate {
-				fmt.Printf("Chaos Triggered: Killing %s\n", path)
-				resp.StatusCode = http.StatusInternalServerError
-				resp.Status = "500 Internal Server Error"
-			}
-		}
+		// // Dynamic Error Injection
+		// if !isStatic && config.ErrorRate > 0 {
+		// 	if rand.Intn(100) < config.ErrorRate {
+		// 		fmt.Printf("Chaos Triggered: Killing %s\n", path)
+		// 		resp.StatusCode = http.StatusInternalServerError
+		// 		resp.Status = "500 Internal Server Error"
+		// 	}
+		// }
+		resp.Header.Del("Access-Control-Allow-Origin")
+        resp.Header.Del("Access-Control-Allow-Credentials")
+
+        resp.Header.Set("Access-Control-Allow-Origin", "*")
+        resp.Header.Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+        resp.Header.Set("Access-Control-Allow-Headers", "*")
 		return nil
 	}
 
