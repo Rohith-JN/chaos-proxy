@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"log"
 	"math/rand"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -18,7 +20,9 @@ type ProxyConfig struct {
 	LagTime    int // Base delay (ms)
 	JitterTime int // Random extra delay (±ms)
 
-	
+	// NEW: Bandwidth Limit (Bytes per second). 0 = Unlimited.
+    // Example: 10240 = 10KB/s (Very Slow)
+    ThrottleBps  int
 	// --- Category 2: HTTP Protocol ---
 	ErrorRate int // Percentage (0-100)
 }
@@ -27,7 +31,19 @@ type ProxyConfig struct {
 var config = ProxyConfig{
 	LagTime:    0,
 	JitterTime: 0,
+	ThrottleBps: 0,
 	ErrorRate:  0,
+}
+
+// This allows WebSockets (and React HMR) to work through your throttler
+func (w *ThrottledResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+    // Check if the underlying writer supports hijacking
+    hijacker, ok := w.ResponseWriter.(http.Hijacker)
+    if !ok {
+        return nil, nil, fmt.Errorf("underlying ResponseWriter does not support hijacking")
+    }
+    // Pass the hijack request through
+    return hijacker.Hijack()
 }
 
 // --- 2. THE REMOTE CONTROL (Admin API Handler) ---
@@ -46,17 +62,66 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var newConfig ProxyConfig
-	err := json.NewDecoder(r.Body).Decode(&newConfig)
+	var err error = json.NewDecoder(r.Body).Decode(&newConfig)
 	if err != nil {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
 
 	config = newConfig
-	fmt.Printf("⚙️ Config Updated: Lag=%dms, Jitter=%dms, Errors=%d%%\n", config.LagTime, config.JitterTime, config.ErrorRate)
+	fmt.Printf("Config Updated: Lag=%dms, Jitter=%dms, Throttle=%dbps, Errors=%d%%\n", config.LagTime, config.JitterTime, config.ThrottleBps, config.ErrorRate)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(config)
+}
+
+// A custom writer that slows down data transfer
+type ThrottledResponseWriter struct {
+    http.ResponseWriter // Embed the original writer so we inherit its methods
+    ThrottleBps int
+}
+
+func (w *ThrottledResponseWriter) Write(b []byte) (int, error) {
+    // If no limit, just write normally
+    if w.ThrottleBps <= 0 {
+        return w.ResponseWriter.Write(b)
+    }
+
+    // "The Slicer" Logic
+    totalBytes := len(b)
+    written := 0
+    
+    // Calculate chunk size (e.g., send 1/10th of the limit every 100ms)
+    // This makes the flow smoother than sending 1 big chunk every second.
+    chunkSize := w.ThrottleBps / 10 
+    if chunkSize == 0 { chunkSize = 1 } // Prevent divide by zero
+
+    for written < totalBytes {
+        // Determine how much to write in this chunk
+        remaining := totalBytes - written
+        toWrite := chunkSize
+        if remaining < toWrite {
+            toWrite = remaining
+        }
+
+        // Write the chunk
+        n, err := w.ResponseWriter.Write(b[written : written+toWrite])
+        if err != nil {
+            return written, err
+        }
+        written += n
+
+        // Flush! (Force the browser to receive this chunk immediately)
+        if f, ok := w.ResponseWriter.(http.Flusher); ok {
+            f.Flush()
+        }
+
+        // Sleep to simulate the low bandwidth
+        // Logic: 10 chunks per second = 100ms sleep
+        time.Sleep(100 * time.Millisecond)
+    }
+
+    return written, nil
 }
 
 // --- 3. HELPER: Apply Chaos Logic to ANY Proxy ---
@@ -86,7 +151,6 @@ func setupProxy(p *httputil.ReverseProxy, target *url.URL) {
 		}
 
 		if delay > 0 {
-			// fmt.Printf("⏳ Lagging request to %s for %dms\n", target.Host, delay)
 			time.Sleep(time.Duration(delay) * time.Millisecond)
 		}
 	}
@@ -111,7 +175,7 @@ func setupProxy(p *httputil.ReverseProxy, target *url.URL) {
 		// 3. Error Injection
 		if !isStatic && config.ErrorRate > 0 {
 			if rand.Intn(100) < config.ErrorRate {
-				fmt.Printf("❌ Chaos Triggered: Killing %s\n", path)
+				fmt.Printf("Chaos Triggered: Killing %s\n", path)
 				resp.StatusCode = http.StatusInternalServerError
 				resp.Status = "500 Internal Server Error"
 			}
@@ -124,7 +188,7 @@ func main() {
 	// --- 4. START ADMIN SERVER (Background Thread) ---
 	go func() {
 		http.HandleFunc("/api/config", handleConfig)
-		fmt.Println("🎮 Admin API running on http://localhost:9000/api/config")
+		fmt.Println("Admin API running on http://localhost:9000/api/config")
 		log.Fatal(http.ListenAndServe(":9000", nil))
 	}()
 
@@ -137,22 +201,33 @@ func main() {
 
 	// Target B: Backend (GraphQL/API)
 	// CHANGE THIS PORT if your backend is on a different port (e.g., 4000, 5000)
-	backendURL, _ := url.Parse("http://localhost:4000") 
+	backendURL, _ := url.Parse("http://localhost:3000") 
 	backendProxy := httputil.NewSingleHostReverseProxy(backendURL)
 	setupProxy(backendProxy, backendURL)
 
 	// --- 6. THE ROUTER (Main Thread) ---
-	mainHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// DECISION LOGIC:
-		// If the path starts with "/graphql", send to Backend.
-		// Otherwise, send to Frontend.
-		if strings.HasPrefix(r.URL.Path, "/graphql") {
-			backendProxy.ServeHTTP(w, r)
-		} else {
-			frontendProxy.ServeHTTP(w, r)
-		}
-	})
+    mainHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        
+        // 1. Wrap the writer with our Throttler
+        // We pass the global config.ThrottleBps to it.
+        // Note: We only wrap if throttling is actually enabled to save CPU.
+        var finalWriter http.ResponseWriter = w
+        
+        if config.ThrottleBps > 0 {
+            finalWriter = &ThrottledResponseWriter{
+                ResponseWriter: w,
+                ThrottleBps: config.ThrottleBps,
+            }
+        }
 
-	fmt.Println("🔥 Chaos Gateway running on http://localhost:8080")
+        // 2. Routing Logic
+        if strings.HasPrefix(r.URL.Path, "/graphql") || strings.HasPrefix(r.URL.Path, "/api") {
+            backendProxy.ServeHTTP(finalWriter, r)
+        } else {
+            frontendProxy.ServeHTTP(finalWriter, r)
+        }
+    })
+
+	fmt.Println("Chaos Gateway running on http://localhost:8080")
 	log.Fatal(http.ListenAndServe(":8080", mainHandler))
 }
