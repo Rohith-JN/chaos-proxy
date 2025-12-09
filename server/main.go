@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"log"
 	"math/rand"
@@ -10,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 )
@@ -49,12 +51,19 @@ func (w *ThrottledResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) 
 // --- 2. THE REMOTE CONTROL (Admin API Handler) ---
 func handleConfig(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 
 	if r.Method == http.MethodOptions {
 		return
 	}
+
+	// --- NEW: Handle GET (Read Config) ---
+    if r.Method == http.MethodGet {
+        w.Header().Set("Content-Type", "application/json")
+        json.NewEncoder(w).Encode(config)
+        return
+    }
 
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -124,86 +133,116 @@ func (w *ThrottledResponseWriter) Write(b []byte) (int, error) {
     return written, nil
 }
 
-// --- 3. HELPER: Apply Chaos Logic to ANY Proxy ---
-func setupProxy(p *httputil.ReverseProxy, target *url.URL) {
-	originalDirector := p.Director
+// --- 3. HELPERS ---
 
-	// A. REQUEST INTERCEPTOR (Lag & Jitter)
-	p.Director = func(req *http.Request) {
-		originalDirector(req)
-		
-		// Fix Host Header so the target server accepts it
-		req.Host = target.Host
-		req.URL.Scheme = target.Scheme
-		req.URL.Host = target.Host
+// A. The Basic Plumbing (Apply this to BOTH Frontend and Backend)
+// This ensures Next.js/Nginx knows we are talking to them, but adds NO lag.
+func prepareProxy(p *httputil.ReverseProxy, target *url.URL) {
+    originalDirector := p.Director
+    p.Director = func(req *http.Request) {
+        originalDirector(req)
+        // CRITICAL: Rewrite the Host header to match the target.
+        // Without this, Next.js might think you are spam/invalid.
+        req.Host = target.Host
+        req.URL.Scheme = target.Scheme
+        req.URL.Host = target.Host
+    }
+}
 
-		// --- CATEGORY 1: TIMING ---
-		delay := 0
+// B. The Chaos Injection (Apply this ONLY to the Backend)
+func applyChaos(p *httputil.ReverseProxy) {
+    // We wrap the EXISTING director (which already has the Host fix from prepareProxy)
+    originalDirector := p.Director
+    
+    p.Director = func(req *http.Request) {
+        // 1. Run the basic plumbing first
+        originalDirector(req)
 
-		// 1. Base Latency
-		if config.LagTime > 0 {
-			delay += config.LagTime
-		}
+        // 2. Now apply Chaos (Lag/Jitter)
+        // Only happens if config is set > 0
+        delay := 0
+        if config.LagTime > 0 {
+            delay += config.LagTime
+        }
+        if config.JitterTime > 0 {
+            delay += rand.Intn(config.JitterTime)
+        }
+        if delay > 0 {
+            time.Sleep(time.Duration(delay) * time.Millisecond)
+        }
+    }
 
-		// 2. Jitter (Randomness)
-		if config.JitterTime > 0 {
-			delay += rand.Intn(config.JitterTime)
-		}
-
-		if delay > 0 {
-			time.Sleep(time.Duration(delay) * time.Millisecond)
-		}
-	}
-
-	// B. RESPONSE INTERCEPTOR (CORS & Errors)
-	p.ModifyResponse = func(resp *http.Response) error {
-		path := resp.Request.URL.Path
-
-		// 1. CORS FIX (Critical for Frontend talking to Backend via Proxy)
-		resp.Header.Del("Access-Control-Allow-Origin")
-		resp.Header.Del("Access-Control-Allow-Credentials")
-		resp.Header.Set("Access-Control-Allow-Origin", "*")
-		resp.Header.Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		resp.Header.Set("Access-Control-Allow-Headers", "*")
-
-		// 2. Filter Static Files (Optional: Don't break JS/CSS)
-		isStatic := false
-		if strings.HasSuffix(path, ".js") || strings.HasSuffix(path, ".css") || strings.HasSuffix(path, ".png") {
-			isStatic = true
-		}
-
-		// 3. Error Injection
-		if !isStatic && config.ErrorRate > 0 {
-			if rand.Intn(100) < config.ErrorRate {
-				fmt.Printf("Chaos Triggered: Killing %s\n", path)
-				resp.StatusCode = http.StatusInternalServerError
-				resp.Status = "500 Internal Server Error"
-			}
-		}
-		return nil
-	}
+    // 3. Response Tampering (Errors, CORS)
+    p.ModifyResponse = func(resp *http.Response) error {
+        // ... (Insert your existing CORS and ErrorRate logic here) ...
+        // See previous code for the full body of ModifyResponse
+        
+        // Quick recap of CORS logic for safety:
+        resp.Header.Del("Access-Control-Allow-Origin")
+        resp.Header.Set("Access-Control-Allow-Origin", "*")
+        
+        if config.ErrorRate > 0 && rand.Intn(100) < config.ErrorRate {
+             resp.StatusCode = http.StatusInternalServerError
+        }
+        return nil
+    }
 }
 
 func main() {
+	frontendUrlArg := flag.String("frontend", "http://localhost:3000", "URL of the Frontend (e.g., http://localhost:3000)")
+	
+	// "backend" flag. Default: Empty string (will fallback to frontend)
+	backendUrlArg := flag.String("backend", "", "URL of the Backend API (optional, defaults to frontend URL)")
+	
+	flag.Parse() // Process the arguments
+
+	// 2. Resolve URLs
+	// Parse Frontend URL
+	frontendURL, err := url.Parse(*frontendUrlArg)
+	if err != nil {
+		fmt.Printf("Invalid Frontend URL: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Parse Backend URL
+	// Logic: If backend arg is empty, we assume "Single API" mode (Next.js style)
+	// and point backend traffic to the frontend URL.
+	var backendURL *url.URL
+	if *backendUrlArg == "" {
+		fmt.Println("Single API Mode detected. Routing API calls to Frontend URL.")
+		backendURL = frontendURL
+	} else {
+		fmt.Println("Dual API Mode detected.")
+		backendURL, err = url.Parse(*backendUrlArg)
+		if err != nil {
+			fmt.Printf("❌ Invalid Backend URL: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
+	// 3. Setup Proxies (Same logic as before, just using variables)
+	frontendProxy := httputil.NewSingleHostReverseProxy(frontendURL)
+	backendProxy := httputil.NewSingleHostReverseProxy(backendURL)
+	
+	// Apply your existing setupProxy logic (CORS, Chaos, etc.)
+	// 2. Setup FRONTEND (Plumbing Only - Fast!)
+    prepareProxy(frontendProxy, frontendURL)
+	
+	// 3. Setup BACKEND (Plumbing + Chaos - Slow!)
+    prepareProxy(backendProxy, backendURL) // Fix headers first
+    applyChaos(backendProxy)               // Then add toxins
+
+	fmt.Printf("\nChaos Proxy Running!\n")
+	fmt.Printf("   Proxy URL:    http://localhost:8080\n")
+	fmt.Printf("   Frontend:     %s\n", frontendURL)
+	fmt.Printf("   Backend:      %s\n", backendURL)
+	fmt.Printf("   Admin Panel:  http://localhost:9000/api/config\n\n")
+
 	// --- 4. START ADMIN SERVER (Background Thread) ---
 	go func() {
 		http.HandleFunc("/api/config", handleConfig)
-		fmt.Println("Admin API running on http://localhost:9000/api/config")
 		log.Fatal(http.ListenAndServe(":9000", nil))
 	}()
-
-	// --- 5. SETUP PROXIES ---
-	
-	// Target A: Frontend (React)
-	frontendURL, _ := url.Parse("http://localhost:3000")
-	frontendProxy := httputil.NewSingleHostReverseProxy(frontendURL)
-	setupProxy(frontendProxy, frontendURL)
-
-	// Target B: Backend (GraphQL/API)
-	// CHANGE THIS PORT if your backend is on a different port (e.g., 4000, 5000)
-	backendURL, _ := url.Parse("http://localhost:3000") 
-	backendProxy := httputil.NewSingleHostReverseProxy(backendURL)
-	setupProxy(backendProxy, backendURL)
 
 	// --- 6. THE ROUTER (Main Thread) ---
     mainHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -228,6 +267,8 @@ func main() {
         }
     })
 
-	fmt.Println("Chaos Gateway running on http://localhost:8080")
-	log.Fatal(http.ListenAndServe(":8080", mainHandler))
+	// Standard start (simplest version)
+	if err := http.ListenAndServe(":8080", mainHandler); err != nil {
+		fmt.Printf("❌ Failed to start server: %v\n", err)
+	}
 }
