@@ -1,18 +1,18 @@
 {
-  "name": "chaos-sdk",
+  "name": "chaos-proxy",
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "main": "./dist/chaos-sdk.umd.js",
-  "module": "./dist/chaos-sdk.es.js",
-  "types": "./dist/chaos-sdk.d.ts",
+  "main": "./dist/chaos-proxy.umd.js",
+  "module": "./dist/chaos-proxy.es.js",
+  "types": "./dist/chaos-proxy.d.ts",
   "bin": {
     "chaos-proxy": "./bin/runner.js"
   },
   "exports": {
     ".": {
-      "import": "./dist/chaos-sdk.es.js",
-      "require": "./dist/chaos-sdk.umd.js"
+      "import": "./dist/chaos-proxy.es.js",
+      "require": "./dist/chaos-proxy.umd.js"
     }
   },
   "scripts": {

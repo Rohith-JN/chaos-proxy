@@ -15,9 +15,9 @@ export default defineConfig({
   },
   build: {
     lib: {
-      entry: path.resolve(__dirname, 'src/chaos-sdk.ts'),
-      name: 'ChaosSdk',
-      fileName: (format) => `chaos-sdk.${format}.js`,
+      entry: path.resolve(__dirname, 'src/chaos-proxy.ts'),
+      name: 'ChaosProxy',
+      fileName: (format) => `chaos-proxy.${format}.js`,
     },
     rollupOptions: {
       // Intentionally NOT externalizing React.
