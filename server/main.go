@@ -2,273 +2,235 @@ package main
 
 import (
 	"bufio"
+	"embed"
 	"encoding/json"
-	"flag"
 	"fmt"
+	"io/fs"
 	"log"
 	"math/rand"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 )
 
-// --- 1. THE BRAIN (Global State) ---
+//go:embed dist/*
+var dashboardAssets embed.FS
+
+type ProxyMode string
+
+const (
+    ModeSplit   ProxyMode = "split"
+    ModeUnified ProxyMode = "unified"
+)
+
 type ProxyConfig struct {
-	// --- Category 1: Network & Timing ---
-	LagTime    int // Base delay (ms)
-	JitterTime int // Random extra delay (±ms)
+    // --- Connection Settings ---
+    Mode           ProxyMode `json:"mode"`           // "split" or "unified"
+    TargetFrontend string    `json:"targetFrontend"` // Used in Split Mode
+    TargetBackend  string    `json:"targetBackend"`  // Used in Split Mode
+    TargetUnified  string    `json:"targetUnified"`  // Used in Unified Mode
+    ChaosRoutes    []string  `json:"chaosRoutes"`    // e.g. ["/api", "/graphql"]
 
-	// NEW: Bandwidth Limit (Bytes per second). 0 = Unlimited.
-    // Example: 10240 = 10KB/s (Very Slow)
-    ThrottleBps  int
-	// --- Category 2: HTTP Protocol ---
-	ErrorRate int // Percentage (0-100)
+    // --- Chaos Settings ---
+    LagTime     int `json:"lagTime"`
+    JitterTime  int `json:"jitterTime"`
+    ThrottleBps int `json:"throttleBps"`
+    ErrorRate   int `json:"errorRate"`
 }
 
-// Set defaults
-var config = ProxyConfig{
-	LagTime:    0,
-	JitterTime: 0,
-	ThrottleBps: 0,
-	ErrorRate:  0,
+// Default State (Waiting for user input)
+var currentConfig = ProxyConfig{
+    Mode: ModeSplit, 
+    // Initialize others as empty strings so the UI knows to prompt the user
 }
 
-// This allows WebSockets (and React HMR) to work through your throttler
-func (w *ThrottledResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
-    // Check if the underlying writer supports hijacking
-    hijacker, ok := w.ResponseWriter.(http.Hijacker)
-    if !ok {
-        return nil, nil, fmt.Errorf("underlying ResponseWriter does not support hijacking")
-    }
-    // Pass the hijack request through
-    return hijacker.Hijack()
-}
-
-// --- 2. THE REMOTE CONTROL (Admin API Handler) ---
-func handleConfig(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-
-	if r.Method == http.MethodOptions {
-		return
-	}
-
-	// --- NEW: Handle GET (Read Config) ---
-    if r.Method == http.MethodGet {
-        w.Header().Set("Content-Type", "application/json")
-        json.NewEncoder(w).Encode(config)
-        return
-    }
-
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	var newConfig ProxyConfig
-	var err error = json.NewDecoder(r.Body).Decode(&newConfig)
-	if err != nil {
-		http.Error(w, "Invalid JSON", http.StatusBadRequest)
-		return
-	}
-
-	config = newConfig
-	fmt.Printf("Config Updated: Lag=%dms, Jitter=%dms, Throttle=%dbps, Errors=%d%%\n", config.LagTime, config.JitterTime, config.ThrottleBps, config.ErrorRate)
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(config)
-}
-
-// A custom writer that slows down data transfer
+// ThrottledResponseWriter wraps the standard writer to slow down data transfer
 type ThrottledResponseWriter struct {
-    http.ResponseWriter // Embed the original writer so we inherit its methods
-    ThrottleBps int
+	http.ResponseWriter
+	ThrottleBps int
 }
 
 func (w *ThrottledResponseWriter) Write(b []byte) (int, error) {
-    // If no limit, just write normally
-    if w.ThrottleBps <= 0 {
-        return w.ResponseWriter.Write(b)
-    }
+	// 1. If unlimited, pass through immediately
+	if w.ThrottleBps <= 0 {
+		return w.ResponseWriter.Write(b)
+	}
 
-    // "The Slicer" Logic
-    totalBytes := len(b)
-    written := 0
-    
-    // Calculate chunk size (e.g., send 1/10th of the limit every 100ms)
-    // This makes the flow smoother than sending 1 big chunk every second.
-    chunkSize := w.ThrottleBps / 10 
-    if chunkSize == 0 { chunkSize = 1 } // Prevent divide by zero
+	// 2. The "Slicer" Logic: Send data in small chunks with sleep
+	totalBytes := len(b)
+	written := 0
+	chunkSize := w.ThrottleBps / 10 // Send 1/10th of limit every 100ms
+	if chunkSize == 0 {
+		chunkSize = 1
+	}
 
-    for written < totalBytes {
-        // Determine how much to write in this chunk
-        remaining := totalBytes - written
-        toWrite := chunkSize
-        if remaining < toWrite {
-            toWrite = remaining
-        }
+	for written < totalBytes {
+		remaining := totalBytes - written
+		toWrite := min(remaining, chunkSize)
 
-        // Write the chunk
-        n, err := w.ResponseWriter.Write(b[written : written+toWrite])
-        if err != nil {
-            return written, err
-        }
-        written += n
+		// Write chunk
+		n, err := w.ResponseWriter.Write(b[written : written+toWrite])
+		if err != nil {
+			return written, err
+		}
+		written += n
 
-        // Flush! (Force the browser to receive this chunk immediately)
-        if f, ok := w.ResponseWriter.(http.Flusher); ok {
-            f.Flush()
-        }
+		// Flush to force browser to receive partial data
+		if f, ok := w.ResponseWriter.(http.Flusher); ok {
+			f.Flush()
+		}
 
-        // Sleep to simulate the low bandwidth
-        // Logic: 10 chunks per second = 100ms sleep
-        time.Sleep(100 * time.Millisecond)
-    }
-
-    return written, nil
+		time.Sleep(100 * time.Millisecond)
+	}
+	return written, nil
 }
 
-// --- 3. HELPERS ---
-
-// A. The Basic Plumbing (Apply this to BOTH Frontend and Backend)
-// This ensures Next.js/Nginx knows we are talking to them, but adds NO lag.
-func prepareProxy(p *httputil.ReverseProxy, target *url.URL) {
-    originalDirector := p.Director
-    p.Director = func(req *http.Request) {
-        originalDirector(req)
-        // CRITICAL: Rewrite the Host header to match the target.
-        // Without this, Next.js might think you are spam/invalid.
-        req.Host = target.Host
-        req.URL.Scheme = target.Scheme
-        req.URL.Host = target.Host
-    }
+// Hijack is required for WebSockets and React Hot Module Replacement (HMR)
+func (w *ThrottledResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if hijacker, ok := w.ResponseWriter.(http.Hijacker); ok {
+		return hijacker.Hijack()
+	}
+	return nil, nil, fmt.Errorf("response writer does not support hijacking")
 }
 
-// B. The Chaos Injection (Apply this ONLY to the Backend)
-func applyChaos(p *httputil.ReverseProxy) {
-    // We wrap the EXISTING director (which already has the Host fix from prepareProxy)
-    originalDirector := p.Director
-    
-    p.Director = func(req *http.Request) {
-        // 1. Run the basic plumbing first
-        originalDirector(req)
+// Helper to parse string to URL on the fly (ignoring errors for brevity)
+func parseToUrl(addr string) *url.URL {
+    u, _ := url.Parse(addr)
+    return u
+}
 
-        // 2. Now apply Chaos (Lag/Jitter)
-        // Only happens if config is set > 0
-        delay := 0
-        if config.LagTime > 0 {
-            delay += config.LagTime
-        }
-        if config.JitterTime > 0 {
-            delay += rand.Intn(config.JitterTime)
-        }
-        if delay > 0 {
-            time.Sleep(time.Duration(delay) * time.Millisecond)
-        }
-    }
+func createDynamicProxy(isChaosPath bool) *httputil.ReverseProxy {
+    return &httputil.ReverseProxy{
+        Director: func(req *http.Request) {
+            // 1. READ CONFIG AT REQUEST TIME
+            var targetStr string
+            
+            if currentConfig.Mode == ModeUnified {
+                // Unified: Everything goes to same place
+                targetStr = currentConfig.TargetUnified
+            } else {
+                // Split: Decide based on "Is this a Chaos Path?"
+                if isChaosPath {
+                    targetStr = currentConfig.TargetBackend
+                } else {
+                    targetStr = currentConfig.TargetFrontend
+                }
+            }
+            
+            // If user hasn't configured it yet, safe fallback
+            if targetStr == "" { return }
 
-    // 3. Response Tampering (Errors, CORS)
-    p.ModifyResponse = func(resp *http.Response) error {
-        // ... (Insert your existing CORS and ErrorRate logic here) ...
-        // See previous code for the full body of ModifyResponse
-        
-        // Quick recap of CORS logic for safety:
-        resp.Header.Del("Access-Control-Allow-Origin")
-        resp.Header.Set("Access-Control-Allow-Origin", "*")
-        
-        if config.ErrorRate > 0 && rand.Intn(100) < config.ErrorRate {
-             resp.StatusCode = http.StatusInternalServerError
-        }
-        return nil
+            target := parseToUrl(targetStr)
+
+            // 2. REWRITE HEADERS (The "Gateway" Logic)
+            req.URL.Scheme = target.Scheme
+            req.URL.Host = target.Host
+            req.Host = target.Host // Vital for Vercel/Next.js/Nginx
+
+            // 3. APPLY CHAOS (Only if this is the "Backend/Chaos" proxy)
+            if isChaosPath {
+                delay := currentConfig.LagTime
+                if currentConfig.JitterTime > 0 {
+                    // Normal Distribution Math
+                    noise := rand.NormFloat64() * (float64(currentConfig.JitterTime) / 2.0)
+                    delay += int(noise)
+                }
+                if delay > 0 {
+                    time.Sleep(time.Duration(delay) * time.Millisecond)
+                }
+            }
+        },
+        // 4. RESPONSE MODIFIER (Errors/CORS)
+        ModifyResponse: func(resp *http.Response) error {
+            if isChaosPath {
+                // Only chaos paths get 500s and CORS fixes
+                resp.Header.Set("Access-Control-Allow-Origin", "*")
+                if currentConfig.ErrorRate > 0 && rand.Intn(100) < currentConfig.ErrorRate {
+                    resp.StatusCode = http.StatusInternalServerError
+                }
+            }
+            return nil
+        },
     }
 }
 
 func main() {
-	frontendUrlArg := flag.String("frontend", "http://localhost:3000", "URL of the Frontend (e.g., http://localhost:3000)")
-	
-	// "backend" flag. Default: Empty string (will fallback to frontend)
-	backendUrlArg := flag.String("backend", "", "URL of the Backend API (optional, defaults to frontend URL)")
-	
-	flag.Parse() // Process the arguments
+    // 1. Create two proxies. 
+    // One for "Clean" traffic (Frontend/Static)
+    // One for "Dirty" traffic (Backend/API)
+    // Note: We don't pass a URL here! The Director handles it dynamically.
+    cleanProxy := createDynamicProxy(false) 
+    chaosProxy := createDynamicProxy(true)
 
-	// 2. Resolve URLs
-	// Parse Frontend URL
-	frontendURL, err := url.Parse(*frontendUrlArg)
-	if err != nil {
-		fmt.Printf("Invalid Frontend URL: %v\n", err)
-		os.Exit(1)
-	}
+    // --- SERVER 1: ADMIN DASHBOARD (:9000) ---
+    go func() {
+        mux := http.NewServeMux()
 
-	// Parse Backend URL
-	// Logic: If backend arg is empty, we assume "Single API" mode (Next.js style)
-	// and point backend traffic to the frontend URL.
-	var backendURL *url.URL
-	if *backendUrlArg == "" {
-		fmt.Println("Single API Mode detected. Routing API calls to Frontend URL.")
-		backendURL = frontendURL
-	} else {
-		fmt.Println("Dual API Mode detected.")
-		backendURL, err = url.Parse(*backendUrlArg)
-		if err != nil {
-			fmt.Printf("❌ Invalid Backend URL: %v\n", err)
-			os.Exit(1)
-		}
-	}
+        // API: Handle Config Updates
+        mux.HandleFunc("/api/config", func(w http.ResponseWriter, r *http.Request) {
+            w.Header().Set("Access-Control-Allow-Origin", "*")
+            w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+            if r.Method == "OPTIONS" { return }
 
-	// 3. Setup Proxies (Same logic as before, just using variables)
-	frontendProxy := httputil.NewSingleHostReverseProxy(frontendURL)
-	backendProxy := httputil.NewSingleHostReverseProxy(backendURL)
-	
-	// Apply your existing setupProxy logic (CORS, Chaos, etc.)
-	// 2. Setup FRONTEND (Plumbing Only - Fast!)
-    prepareProxy(frontendProxy, frontendURL)
-	
-	// 3. Setup BACKEND (Plumbing + Chaos - Slow!)
-    prepareProxy(backendProxy, backendURL) // Fix headers first
-    applyChaos(backendProxy)               // Then add toxins
+            if r.Method == "POST" {
+                json.NewDecoder(r.Body).Decode(&currentConfig)
+                fmt.Printf("Updated Config: Mode=%s\n", currentConfig.Mode)
+            }
+            json.NewEncoder(w).Encode(currentConfig)
+        })
 
-	fmt.Printf("\nChaos Proxy Running!\n")
-	fmt.Printf("   Proxy URL:    http://localhost:8080\n")
-	fmt.Printf("   Frontend:     %s\n", frontendURL)
-	fmt.Printf("   Backend:      %s\n", backendURL)
-	fmt.Printf("   Admin Panel:  http://localhost:9000/api/config\n\n")
+        // UI: Serve Embedded React App
+        // Ensure "dist" exists (run npm run build!)
+        distFS, _ := fs.Sub(dashboardAssets, "dist") 
+        mux.Handle("/", http.FileServer(http.FS(distFS)))
 
-	// --- 4. START ADMIN SERVER (Background Thread) ---
-	go func() {
-		http.HandleFunc("/api/config", handleConfig)
-		log.Fatal(http.ListenAndServe(":9000", nil))
-	}()
+        fmt.Println("🛠  Admin Dashboard: http://localhost:9000")
+        log.Fatal(http.ListenAndServe(":9000", mux))
+    }()
 
-	// --- 6. THE ROUTER (Main Thread) ---
-    mainHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+    // --- SERVER 2: CHAOS PROXY (:8080) ---
+    proxyHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
         
-        // 1. Wrap the writer with our Throttler
-        // We pass the global config.ThrottleBps to it.
-        // Note: We only wrap if throttling is actually enabled to save CPU.
-        var finalWriter http.ResponseWriter = w
+        // Safety Check
+        if currentConfig.TargetUnified == "" && currentConfig.TargetFrontend == "" {
+            w.WriteHeader(http.StatusServiceUnavailable)
+            w.Write([]byte("Chaos Proxy not configured. Go to http://localhost:9000"))
+            return
+        }
+
+        // --- FIX STARTS HERE ---
+        // 1. Throttling Logic
+        // We MUST NOT throttle WebSockets (Upgrade: websocket) or it kills the connection.
+        isWebSocket := r.Header.Get("Upgrade") == "websocket" || r.Header.Get("Upgrade") == "Websocket"
+
+        var writer http.ResponseWriter = w
         
-        if config.ThrottleBps > 0 {
-            finalWriter = &ThrottledResponseWriter{
-                ResponseWriter: w,
-                ThrottleBps: config.ThrottleBps,
+        // Only throttle if it is NOT a websocket AND throttling is enabled
+        if !isWebSocket && currentConfig.ThrottleBps > 0 {
+            writer = &ThrottledResponseWriter{ResponseWriter: w, ThrottleBps: currentConfig.ThrottleBps}
+        }
+
+        // 2. ROUTING LOGIC
+        // Does this request match the "Chaos Routes" list?
+        shouldApplyChaos := false
+        for _, route := range currentConfig.ChaosRoutes {
+            if strings.HasPrefix(r.URL.Path, route) {
+                shouldApplyChaos = true
+                break
             }
         }
 
-        // 2. Routing Logic
-        if strings.HasPrefix(r.URL.Path, "/graphql") || strings.HasPrefix(r.URL.Path, "/api") {
-            backendProxy.ServeHTTP(finalWriter, r)
+        // 3. FORWARDING
+        if shouldApplyChaos {
+            chaosProxy.ServeHTTP(writer, r)
         } else {
-            frontendProxy.ServeHTTP(finalWriter, r)
+            cleanProxy.ServeHTTP(writer, r)
         }
     })
 
-	// Standard start (simplest version)
-	if err := http.ListenAndServe(":8080", mainHandler); err != nil {
-		fmt.Printf("❌ Failed to start server: %v\n", err)
-	}
+    fmt.Println("🚀 Chaos Proxy:    http://localhost:8080")
+    log.Fatal(http.ListenAndServe(":8080", proxyHandler))
 }
