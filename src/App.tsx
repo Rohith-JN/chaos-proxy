@@ -11,7 +11,9 @@ interface ProxyConfig {
     ChaosRoutes: string[]; // Sent as array to server
 
     // --- Existing Chaos Settings ---
-    LagTime: number;
+    LagToReq: number | string;
+    LagToResp: number | string;
+
     JitterTime: number;
     ThrottleBps: number;
     ErrorRate: number;
@@ -24,7 +26,9 @@ interface ProxyConfigState {
     TargetUnified: string;
     ChaosRoutes: string; // Kept as string for the text input (comma separated)
 
-    LagTime: number | string;
+    LagToReq: number | string;
+    LagToResp: number | string;
+
     JitterTime: number | string;
     ThrottleBps: number | string;
     ErrorRate: number | string;
@@ -37,7 +41,10 @@ const App: React.FC = () => {
         TargetBackend: 'http://localhost:4000',
         TargetUnified: 'http://localhost:80',
         ChaosRoutes: '/api, /graphql',
-        LagTime: 0,
+
+        LagToReq: 0,
+        LagToResp: 0,
+
         JitterTime: 0,
         ThrottleBps: 0,
         ErrorRate: 0,
@@ -86,7 +93,9 @@ const App: React.FC = () => {
                 TargetUnified: currentConfig.TargetUnified,
                 ChaosRoutes: currentConfig.ChaosRoutes.split(',').map(s => s.trim()).filter(s => s !== ''),
 
-                LagTime: Number(currentConfig.LagTime) || 0,
+                LagToReq: Number(currentConfig.LagToReq) || 0,
+                LagToResp: Number(currentConfig.LagToResp) || 0,
+
                 JitterTime: Number(currentConfig.JitterTime) || 0,
                 ThrottleBps: Number(currentConfig.ThrottleBps) || 0,
                 ErrorRate: Number(currentConfig.ErrorRate) || 0,
@@ -219,9 +228,22 @@ const App: React.FC = () => {
 
                     {/* SECTION 2: CHAOS CONTROLS */}
                     <div style={styles.section}>
-                        <div style={styles.sectionTitle}>Network Timing</div>
-                        {renderControl("Lag Base", "LagTime", 0, 5000, "ms")}
-                        {renderControl("Jitter (+/-)", "JitterTime", 0, 2000, "ms")}
+                        <div style={styles.sectionTitle}>Network Latency (Asymmetric)</div>
+
+                        {/* 1. UPLOAD CONTROL */}
+                        <div style={{ marginBottom: '15px' }}>
+                            {renderControl("Request Delay", "LagToReq", 0, 5000, "ms")}
+                            <div style={styles.hint}>Simulates slow sending (e.g., submitting a form).</div>
+                        </div>
+
+                        {/* 2. DOWNLOAD CONTROL */}
+                        <div style={{ marginBottom: '15px' }}>
+                            {renderControl("Response Delay", "LagToResp", 0, 5000, "ms")}
+                            <div style={styles.hint}>Simulates slow loading (e.g., images appearing).</div>
+                        </div>
+
+                        {/* Global Jitter */}
+                        {renderControl("Random Jitter (+/-)", "JitterTime", 0, 2000, "ms")}
                     </div>
 
                     <div style={styles.section}>
@@ -371,7 +393,6 @@ const styles: StylesDictionary = {
 
 // Inject CSS for slider thumb and scrollbar
 const globalStyles = `
-  input[type=range] { accent-color: #f0a500; }
   body { margin: 0; background: #111; }
   
   /* Custom Scrollbar */
@@ -379,6 +400,14 @@ const globalStyles = `
   ::-webkit-scrollbar-track { background: #111; }
   ::-webkit-scrollbar-thumb { background: #444; borderRadius: 4px; }
   ::-webkit-scrollbar-thumb:hover { background: #f0a500; }
+  input[type=range] { accent-color: #f0a500; }
+  input[type=number]::-webkit-inner-spin-button, 
+  input[type=number]::-webkit-outer-spin-button { 
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    appearance: none;
+    margin: 0; 
+}
 `;
 
 if (typeof document !== 'undefined') {
