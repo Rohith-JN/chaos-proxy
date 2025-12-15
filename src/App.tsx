@@ -14,9 +14,6 @@ interface ProxyConfig {
     LagToReq: number | string;
     LagToResp: number | string;
 
-    JitterTime: number;
-    ThrottleBps: number;
-    ErrorRate: number;
 }
 
 interface ProxyConfigState {
@@ -29,9 +26,6 @@ interface ProxyConfigState {
     LagToReq: number | string;
     LagToResp: number | string;
 
-    JitterTime: number | string;
-    ThrottleBps: number | string;
-    ErrorRate: number | string;
 }
 
 const App: React.FC = () => {
@@ -45,9 +39,6 @@ const App: React.FC = () => {
         LagToReq: 0,
         LagToResp: 0,
 
-        JitterTime: 0,
-        ThrottleBps: 0,
-        ErrorRate: 0,
     });
 
     const [status, setStatus] = useState<string>('Connecting...');
@@ -96,9 +87,6 @@ const App: React.FC = () => {
                 LagToReq: Number(currentConfig.LagToReq) || 0,
                 LagToResp: Number(currentConfig.LagToResp) || 0,
 
-                JitterTime: Number(currentConfig.JitterTime) || 0,
-                ThrottleBps: Number(currentConfig.ThrottleBps) || 0,
-                ErrorRate: Number(currentConfig.ErrorRate) || 0,
             };
 
             const response = await fetch(ADMIN_API_URL, {
@@ -133,12 +121,6 @@ const App: React.FC = () => {
         setStatus('⚠️ Unsaved');
     };
 
-    const applyPreset = (bps: number) => {
-        setConfig(prev => ({ ...prev, ThrottleBps: bps }));
-        setHasChanges(true);
-        setStatus('⚠️ Unsaved');
-    }
-
     // --- Helper to render Chaos Sliders ---
     const renderControl = (label: string, name: keyof ProxyConfigState, min: number, max: number, unit: string = "") => (
         <div style={styles.controlRow}>
@@ -170,7 +152,6 @@ const App: React.FC = () => {
             <div style={styles.card}>
                 {/* HEADER */}
                 <div style={styles.header}>
-                    <span style={{ fontSize: '18px' }}>🔥 Chaos Proxy Admin</span>
                     <div style={styles.statusBadge}>
                         {status}
                     </div>
@@ -242,24 +223,6 @@ const App: React.FC = () => {
                             <div style={styles.hint}>Simulates slow loading (e.g., images appearing).</div>
                         </div>
 
-                        {/* Global Jitter */}
-                        {renderControl("Random Jitter (+/-)", "JitterTime", 0, 2000, "ms")}
-                    </div>
-
-                    <div style={styles.section}>
-                        <div style={styles.sectionTitle}>Bandwidth (The Slicer)</div>
-                        <div style={styles.presetButtons}>
-                            <button style={styles.presetBtn} onClick={() => applyPreset(0)}>Unlimited</button>
-                            <button style={styles.presetBtn} onClick={() => applyPreset(150000)}>Fast 3G</button>
-                            <button style={styles.presetBtn} onClick={() => applyPreset(50000)}>Slow 3G</button>
-                            <button style={styles.presetBtn} onClick={() => applyPreset(10240)}>EDGE</button>
-                        </div>
-                        {renderControl("Raw Limit", "ThrottleBps", 0, 500000, "bps")}
-                    </div>
-
-                    <div style={styles.section}>
-                        <div style={styles.sectionTitle}>Reliability</div>
-                        {renderControl("Error Rate", "ErrorRate", 0, 100, "%")}
                     </div>
                 </div>
 

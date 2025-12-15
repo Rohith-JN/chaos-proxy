@@ -1,14 +1,11 @@
 package main
 
 import (
-	"bufio"
 	"embed"
 	"encoding/json"
 	"fmt"
 	"io/fs"
 	"log"
-	"math/rand"
-	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -42,10 +39,6 @@ type ProxyConfig struct {
 	// --- Chaos Settings ---
 	LagToReq  int `json:"lagToReq"`
 	LagToResp int `json:"lagToResp"`
-
-	JitterTime  int `json:"jitterTime"`
-	ThrottleBps int `json:"throttleBps"`
-	ErrorRate   int `json:"errorRate"`
 }
 
 var (
@@ -57,60 +50,9 @@ var (
 	}
 )
 
-// ThrottledResponseWriter wraps the standard writer to slow down data transfer
-type ThrottledResponseWriter struct {
-	http.ResponseWriter
-	ThrottleBps int
-}
-
-func (w *ThrottledResponseWriter) Write(b []byte) (int, error) {
-	if w.ThrottleBps <= 0 {
-		return w.ResponseWriter.Write(b)
-	}
-
-	totalBytes := len(b)
-	written := 0
-	chunkSize := w.ThrottleBps / 10
-	if chunkSize == 0 {
-		chunkSize = 1
-	}
-
-	for written < totalBytes {
-		remaining := totalBytes - written
-		toWrite := min(remaining, chunkSize)
-
-		n, err := w.ResponseWriter.Write(b[written : written+toWrite])
-		if err != nil {
-			return written, err
-		}
-		written += n
-
-		if f, ok := w.ResponseWriter.(http.Flusher); ok {
-			f.Flush()
-		}
-
-		time.Sleep(100 * time.Millisecond)
-	}
-	return written, nil
-}
-
-func (w *ThrottledResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
-	if hijacker, ok := w.ResponseWriter.(http.Hijacker); ok {
-		return hijacker.Hijack()
-	}
-	return nil, nil, fmt.Errorf("response writer does not support hijacking")
-}
-
 func parseToUrl(addr string) *url.URL {
 	u, _ := url.Parse(addr)
 	return u
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 // createDynamicProxy now accepts 'isBackendRoute' strictly for ROUTING purposes.
@@ -156,10 +98,6 @@ func createDynamicProxy(isBackendRoute bool) *httputil.ReverseProxy {
 			// 4. APPLY REQUEST LAG
 			if shouldApplyChaos {
 				reqDelay := cfg.LagToReq
-				if cfg.JitterTime > 0 {
-					reqDelay += int(rand.NormFloat64() * (float64(cfg.JitterTime) / 2.0))
-				}
-
 				if reqDelay > 0 {
 					time.Sleep(time.Duration(reqDelay) * time.Millisecond)
 				}
@@ -182,17 +120,9 @@ func createDynamicProxy(isBackendRoute bool) *httputil.ReverseProxy {
 			if shouldApplyChaos {
 				resp.Header.Set("Access-Control-Allow-Origin", "*")
 
-				// Error Injection
-				if cfg.ErrorRate > 0 && rand.Intn(100) < cfg.ErrorRate {
-					resp.StatusCode = http.StatusInternalServerError
-				}
-
 				// Response Lag
 				if cfg.LagToResp > 0 {
 					respDelay := cfg.LagToResp
-					if cfg.JitterTime > 0 {
-						respDelay += int(rand.NormFloat64() * (float64(cfg.JitterTime) / 2.0))
-					}
 					if respDelay > 0 {
 						time.Sleep(time.Duration(respDelay) * time.Millisecond)
 					}
@@ -253,13 +183,7 @@ func main() {
 			return
 		}
 
-		isWebSocket := r.Header.Get("Upgrade") == "websocket" || r.Header.Get("Upgrade") == "Websocket"
-
 		var writer http.ResponseWriter = w
-		// Only throttle if not WebSocket
-		if !isWebSocket && cfg.ThrottleBps > 0 {
-			writer = &ThrottledResponseWriter{ResponseWriter: w, ThrottleBps: cfg.ThrottleBps}
-		}
 
 		// Routing Logic: Backend or Frontend?
 		isBackendRoute := false
@@ -277,6 +201,6 @@ func main() {
 		}
 	})
 
-	fmt.Println("🚀 Chaos Proxy:    http://localhost:8080")
+	fmt.Println("🚀 Chaos Proxy: http://localhost:8080")
 	log.Fatal(http.ListenAndServe(":8080", proxyHandler))
 }
