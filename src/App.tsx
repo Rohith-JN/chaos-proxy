@@ -394,42 +394,61 @@ const App: React.FC = () => {
                     </div>
 
                     {/* SECTION 3: FAILURE MODES */}
+                    {/* SECTION 3: FAILURE MODES */}
                     <div style={styles.section}>
-                        <div style={styles.sectionTitle}>Failure Modes</div>
-                        <div style={styles.presetButtons}>
-                            <button
-                                style={getButtonStyle(config.failureMode === 'normal')}
-                                onClick={() => {
-                                    setConfig(prev => ({ ...prev, failureMode: 'normal' }));
-                                    setHasChanges(true);
-                                    setStatus('⚠️ Unsaved');
-                                }}>normal</button>
+                        <div style={styles.sectionTitle}>Connection Failure Modes</div>
 
-                            <button
-                                style={getButtonStyle(config.failureMode === 'timeout')}
-                                onClick={() => {
-                                    setConfig(prev => ({ ...prev, failureMode: 'timeout' }));
-                                    setHasChanges(true);
-                                    setStatus('⚠️ Unsaved');
-                                }}>timeout</button>
+                        <div style={styles.failureGrid}>
+                            {[
+                                {
+                                    id: 'normal',
+                                    label: 'Normal Operation',
+                                    desc: 'Traffic passes through unmodified. No artificial errors.'
+                                },
+                                {
+                                    id: 'timeout',
+                                    label: 'Request Timeout',
+                                    desc: 'Simulates a 60s server hang. Forces the client to time out.'
+                                },
+                                {
+                                    id: 'hang_body',
+                                    label: 'Ghost / Hang Body',
+                                    desc: 'Sends headers, then stops sending data forever. Infinite loading.'
+                                },
+                                {
+                                    id: 'close_body',
+                                    label: 'Early Disconnect',
+                                    desc: 'Terminates TCP connection mid-download. Simulates "Network Error".'
+                                }
+                            ].map((mode) => {
+                                const isActive = config.failureMode === mode.id;
 
-                            <button
-                                style={getButtonStyle(config.failureMode === 'hang_body')}
-                                onClick={() => {
-                                    setConfig(prev => ({ ...prev, failureMode: 'hang_body' }));
-                                    setHasChanges(true);
-                                    setStatus('⚠️ Unsaved');
-                                }}>hang_body</button>
-
-                            <button
-                                style={getButtonStyle(config.failureMode === 'close_body')}
-                                onClick={() => {
-                                    setConfig(prev => ({ ...prev, failureMode: 'close_body' }));
-                                    setHasChanges(true);
-                                    setStatus('⚠️ Unsaved');
-                                }}>close_body</button>
+                                return (
+                                    <div
+                                        key={mode.id}
+                                        onClick={() => {
+                                            setConfig(prev => ({ ...prev, failureMode: mode.id }));
+                                            setHasChanges(true);
+                                            setStatus('⚠️ Unsaved');
+                                        }}
+                                        style={{
+                                            ...styles.modeCard,
+                                            ...(isActive ? styles.modeCardActive : {})
+                                        }}
+                                    >
+                                        <div style={{
+                                            ...styles.modeTitle,
+                                            ...(isActive ? styles.modeTitleActive : {})
+                                        }}>
+                                            {mode.label}
+                                        </div>
+                                        <div style={styles.modeDesc}>
+                                            {mode.desc}
+                                        </div>
+                                    </div>
+                                );
+                            })}
                         </div>
-
                     </div>
                 </div>
 
@@ -558,7 +577,48 @@ const styles: StylesDictionary = {
         border: 'none',
         borderRadius: '4px',
         fontSize: '14px'
-    }
+    },
+    // Add these to your existing 'styles' object
+    failureGrid: {
+        display: 'grid',
+        gridTemplateColumns: '1fr 1fr', // Two columns
+        gap: '12px',
+        marginBottom: '10px'
+    },
+    modeCard: {
+        background: '#1a1a1a',
+        border: '1px solid #333',
+        borderRadius: '6px',
+        padding: '12px',
+        cursor: 'pointer',
+        transition: 'all 0.2s ease',
+        display: 'flex',
+        flexDirection: 'column',
+        justifyContent: 'center',
+        textAlign: 'left'
+    },
+    modeCardActive: {
+        background: 'rgba(240, 165, 0, 0.15)', // Low opacity yellow fill
+        border: '1px solid #f0a500',           // Bright yellow border
+        boxShadow: '0 0 10px rgba(240, 165, 0, 0.2)'
+    },
+    modeTitle: {
+        fontSize: '13px',
+        fontWeight: 'bold',
+        color: '#eee',
+        marginBottom: '4px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '8px'
+    },
+    modeTitleActive: {
+        color: '#f0a500' // Text turns yellow when active
+    },
+    modeDesc: {
+        fontSize: '11px',
+        color: '#777',
+        lineHeight: '1.4'
+    },
 };
 
 // Inject CSS for slider thumb and scrollbar
