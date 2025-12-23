@@ -8,9 +8,8 @@ interface ProxyConfig {
     TargetFrontend: string;
     TargetBackend: string;
     TargetUnified: string;
-    ChaosRoutes: string[]; // Sent as array to server
+    ChaosRoutes: string[];
 
-    // --- Existing Chaos Settings ---
     LagToReq: number | string;
     LagToResp: number | string;
 
@@ -18,6 +17,7 @@ interface ProxyConfig {
     bandwidthDown: number | string;
 
     jitter: number | string;
+    failureMode: string;
 
 }
 
@@ -26,7 +26,7 @@ interface ProxyConfigState {
     TargetFrontend: string;
     TargetBackend: string;
     TargetUnified: string;
-    ChaosRoutes: string; // Kept as string for the text input (comma separated)
+    ChaosRoutes: string;
 
     LagToReq: number | string;
     LagToResp: number | string;
@@ -35,6 +35,8 @@ interface ProxyConfigState {
     bandwidthDown: number | string;
 
     jitter: number | string;
+
+    failureMode: string
 
 }
 
@@ -52,12 +54,13 @@ const App: React.FC = () => {
         bandwidthUp: 0,
         bandwidthDown: 0,
 
-        jitter: 0
-
+        jitter: 0,
+        failureMode: 'normal'
     });
 
     const [status, setStatus] = useState<string>('Connecting...');
     const [hasChanges, setHasChanges] = useState<boolean>(false);
+    const [throttleMode, setThrottleMode] = useState<string>('unlimited');
 
     // --- 1. Load Config on Mount ---
     useEffect(() => {
@@ -75,6 +78,39 @@ const App: React.FC = () => {
                         ...serverConfig,
                         ChaosRoutes: routesStr
                     }));
+
+                    // --- SMART PRESET DETECTION ---
+                    const isZero = (v: any) => !v || Number(v) === 0;
+
+                    // 1. Check for Unlimited (Default)
+                    if (isZero(serverConfig.LagToReq) &&
+                        isZero(serverConfig.LagToResp) &&
+                        isZero(serverConfig.bandwidthUp) &&
+                        isZero(serverConfig.bandwidthDown) &&
+                        isZero(serverConfig.jitter)) {
+                        setThrottleMode('unlimited');
+                    }
+                    // 2. Check for Fast 4G
+                    else if (serverConfig.bandwidthDown === 2000 && serverConfig.LagToResp === 80) {
+                        setThrottleMode('fast4g');
+                    }
+                    // 3. Check for Slow 4G
+                    else if (serverConfig.bandwidthDown === 750 && serverConfig.LagToResp === 200) {
+                        setThrottleMode('slow4g');
+                    }
+                    // 4. Check for 3G
+                    else if (serverConfig.bandwidthDown === 100 && serverConfig.LagToResp === 400) {
+                        setThrottleMode('3g');
+                    }
+                    // 5. Check for EDGE
+                    else if (serverConfig.bandwidthDown === 30 && serverConfig.LagToResp === 800) {
+                        setThrottleMode('edge');
+                    }
+                    // 6. Otherwise, it's custom
+                    else {
+                        setThrottleMode('custom');
+                    }
+
                     setStatus('Ready');
                 } else {
                     setStatus('Server Error');
@@ -107,6 +143,8 @@ const App: React.FC = () => {
 
                 jitter: Number(currentConfig.jitter) || 0,
 
+                failureMode: String(currentConfig.failureMode) || 'normal'
+
             };
 
             const response = await fetch(ADMIN_API_URL, {
@@ -137,9 +175,26 @@ const App: React.FC = () => {
         const newValue = type === 'checkbox' ? checked : value;
 
         setConfig(prev => ({ ...prev, [key]: newValue }));
+
+        // If user manually changes a slider, we are no longer in a preset
+        if (['LagToReq', 'LagToResp', 'bandwidthUp', 'bandwidthDown', 'jitter'].includes(key)) {
+            setThrottleMode('custom');
+        }
+
         setHasChanges(true);
         setStatus('⚠️ Unsaved');
     };
+
+    // Helper to determine button style based on active state
+    const getButtonStyle = (isActive: boolean) => ({
+        ...styles.presetBtn,
+        ...(isActive ? {
+            background: '#f0a500',
+            color: '#222',
+            borderColor: '#f0a500',
+            fontWeight: 'bold' as const
+        } : {})
+    });
 
     // --- Helper to render Chaos Sliders ---
     const renderControl = (label: string, name: keyof ProxyConfigState, min: number, max: number, unit: string = "") => (
@@ -231,93 +286,84 @@ const App: React.FC = () => {
                     <div style={styles.section}>
                         <div style={styles.sectionTitle}>Throttling</div>
                         <div style={styles.presetButtons}>
-                            <button style={styles.presetBtn} onClick={() => {
-                                setConfig(prev => ({
-                                    ...prev, LagToReq: 0,
-                                    LagToResp: 0,
+                            <button
+                                style={getButtonStyle(throttleMode === 'unlimited')}
+                                onClick={() => {
+                                    setThrottleMode('unlimited');
+                                    setConfig(prev => ({
+                                        ...prev, LagToReq: 0,
+                                        LagToResp: 0,
+                                        bandwidthUp: 0,
+                                        bandwidthDown: 0,
+                                        jitter: 0
+                                    }));
+                                    setHasChanges(true);
+                                    setStatus('⚠️ Unsaved');
+                                }}>Unlimited</button>
 
-                                    bandwidthUp: 0,
-                                    bandwidthDown: 0,
+                            <button
+                                style={getButtonStyle(throttleMode === 'fast4g')}
+                                onClick={() => {
+                                    setThrottleMode('fast4g');
+                                    setConfig(prev => ({
+                                        ...prev,
+                                        LagToReq: 50,
+                                        LagToResp: 80,
+                                        bandwidthUp: 750,     // ~6 Mbps
+                                        bandwidthDown: 2000,  // ~16 Mbps
+                                        jitter: 30
+                                    }));
+                                    setHasChanges(true);
+                                    setStatus('⚠️ Unsaved');
+                                }}>Fast 4G</button>
 
-                                    jitter: 0
-                                }));
-                                setHasChanges(true);
+                            <button
+                                style={getButtonStyle(throttleMode === 'slow4g')}
+                                onClick={() => {
+                                    setThrottleMode('slow4g');
+                                    setConfig(prev => ({
+                                        ...prev,
+                                        LagToReq: 150,
+                                        LagToResp: 200,
+                                        bandwidthUp: 250,     // ~2 Mbps
+                                        bandwidthDown: 750,   // ~6 Mbps
+                                        jitter: 120
+                                    }));
+                                    setHasChanges(true);
+                                    setStatus('⚠️ Unsaved');
+                                }}>Slow 4G</button>
 
-                                setStatus('⚠️ Unsaved');
-                            }}>Unlimited</button>
-                            <button style={styles.presetBtn} onClick={() => {
-                                setConfig(prev => ({
-                                    ...prev,
+                            <button
+                                style={getButtonStyle(throttleMode === '3g')}
+                                onClick={() => {
+                                    setThrottleMode('3g');
+                                    setConfig(prev => ({
+                                        ...prev,
+                                        LagToReq: 300,
+                                        LagToResp: 400,
+                                        bandwidthUp: 40,      // ~300 kbps
+                                        bandwidthDown: 100,   // ~800 kbps
+                                        jitter: 200
+                                    }));
+                                    setHasChanges(true);
+                                    setStatus('⚠️ Unsaved');
+                                }}>3G</button>
 
-                                    // Latency (TTFB)
-                                    LagToReq: 50,
-                                    LagToResp: 80,
-
-                                    // Bandwidth (KB/s)
-                                    bandwidthUp: 750,     // ~6 Mbps
-                                    bandwidthDown: 2000,  // ~16 Mbps
-
-                                    // Jitter
-                                    jitter: 30
-                                }));
-                                setHasChanges(true);
-
-                                setStatus('⚠️ Unsaved');
-
-                            }}>Fast 4G</button>
-                            <button style={styles.presetBtn} onClick={() => {
-                                setConfig(prev => ({
-                                    ...prev,
-
-                                    LagToReq: 150,
-                                    LagToResp: 200,
-
-                                    bandwidthUp: 250,     // ~2 Mbps
-                                    bandwidthDown: 750,   // ~6 Mbps
-
-                                    jitter: 120
-                                }));
-                                setHasChanges(true);
-
-                                setStatus('⚠️ Unsaved');
-
-
-                            }}>Slow 4G</button>
-                            <button style={styles.presetBtn} onClick={() => {
-                                setConfig(prev => ({
-                                    ...prev,
-
-                                    LagToReq: 300,
-                                    LagToResp: 400,
-
-                                    bandwidthUp: 40,      // ~300 kbps
-                                    bandwidthDown: 100,   // ~800 kbps
-
-                                    jitter: 200
-                                }));
-                                setHasChanges(true);
-
-                                setStatus('⚠️ Unsaved');
-
-                            }}>3G</button>
-                            <button style={styles.presetBtn} onClick={() => {
-                                setConfig(prev => ({
-                                    ...prev,
-
-                                    LagToReq: 600,
-                                    LagToResp: 800,
-
-                                    bandwidthUp: 10,      // ~80 kbps
-                                    bandwidthDown: 30,    // ~240 kbps
-
-                                    jitter: 500
-                                }));
-                                setHasChanges(true);
-
-                                setStatus('⚠️ Unsaved');
-
-
-                            }}>EDGE (Extreme)</button>
+                            <button
+                                style={getButtonStyle(throttleMode === 'edge')}
+                                onClick={() => {
+                                    setThrottleMode('edge');
+                                    setConfig(prev => ({
+                                        ...prev,
+                                        LagToReq: 600,
+                                        LagToResp: 800,
+                                        bandwidthUp: 10,      // ~80 kbps
+                                        bandwidthDown: 30,    // ~240 kbps
+                                        jitter: 500
+                                    }));
+                                    setHasChanges(true);
+                                    setStatus('⚠️ Unsaved');
+                                }}>EDGE (Extreme)</button>
                         </div>
 
                         {/* 1. UPLOAD CONTROL */}
@@ -345,6 +391,45 @@ const App: React.FC = () => {
                             {renderControl("Jitter", "jitter", 0, 500000, "bps")}
 
                         </div>
+                    </div>
+
+                    {/* SECTION 3: FAILURE MODES */}
+                    <div style={styles.section}>
+                        <div style={styles.sectionTitle}>Failure Modes</div>
+                        <div style={styles.presetButtons}>
+                            <button
+                                style={getButtonStyle(config.failureMode === 'normal')}
+                                onClick={() => {
+                                    setConfig(prev => ({ ...prev, failureMode: 'normal' }));
+                                    setHasChanges(true);
+                                    setStatus('⚠️ Unsaved');
+                                }}>normal</button>
+
+                            <button
+                                style={getButtonStyle(config.failureMode === 'timeout')}
+                                onClick={() => {
+                                    setConfig(prev => ({ ...prev, failureMode: 'timeout' }));
+                                    setHasChanges(true);
+                                    setStatus('⚠️ Unsaved');
+                                }}>timeout</button>
+
+                            <button
+                                style={getButtonStyle(config.failureMode === 'hang_body')}
+                                onClick={() => {
+                                    setConfig(prev => ({ ...prev, failureMode: 'hang_body' }));
+                                    setHasChanges(true);
+                                    setStatus('⚠️ Unsaved');
+                                }}>hang_body</button>
+
+                            <button
+                                style={getButtonStyle(config.failureMode === 'close_body')}
+                                onClick={() => {
+                                    setConfig(prev => ({ ...prev, failureMode: 'close_body' }));
+                                    setHasChanges(true);
+                                    setStatus('⚠️ Unsaved');
+                                }}>close_body</button>
+                        </div>
+
                     </div>
                 </div>
 
@@ -392,7 +477,7 @@ const styles: StylesDictionary = {
         boxShadow: '0 20px 50px rgba(0,0,0,0.5)',
         display: 'flex',
         flexDirection: 'column',
-        maxHeight: '90vh' // Prevent overflow on small screens
+        maxHeight: '90vh'
     },
     header: {
         padding: '20px',

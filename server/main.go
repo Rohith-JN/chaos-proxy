@@ -35,49 +35,62 @@ type ProxyConfig struct {
 	ChaosRoutes    []string  `json:"chaosRoutes"`
 
 	// --- REAL LAG SETTINGS ---
-	LagToReq  int `json:"lagToReq"`  // TTFB (upload)
-	LagToResp int `json:"lagToResp"` // TTFB (download)
+	LagToReq  int `json:"lagToReq"`  
+	LagToResp int `json:"lagToResp"` 
 
-	BandwidthUp   int `json:"bandwidthUp"`   // upload bandwidth
-	BandwidthDown int `json:"bandwidthDown"` // download bandwidth
+	BandwidthUp   int `json:"bandwidthUp"`   
+	BandwidthDown int `json:"bandwidthDown"` 
 
 	Jitter      int `json:"jitterMs"`
 
+	FailureMode string `json:"failureMode"`
 }
-
 
 var (
 	configMutex   sync.RWMutex
 	currentConfig = ProxyConfig{
-		Mode:            ModeSplit,
+		Mode: ModeSplit,
+		FailureMode: "normal",
 	}
 )
 
 type ThrottledReadCloser struct {
-	rc          io.ReadCloser
-	bytesPerSec int
-	baseDelay   time.Duration
-	jitter      time.Duration
+    rc          io.ReadCloser
+    bytesPerSec int
+    baseDelay   time.Duration
+    jitter      time.Duration
+    
+    failureMode string 
 }
 
 func (t *ThrottledReadCloser) Read(p []byte) (int, error) {
-	// Delay first byte only once (TTFB)
-	if t.baseDelay > 0 {
-		time.Sleep(t.baseDelay)
-		t.baseDelay = 0
-	}
+    if t.baseDelay > 0 {
+        time.Sleep(t.baseDelay)
+        t.baseDelay = 0
+    }
 
-	n, err := t.rc.Read(p)
+    n, err := t.rc.Read(p)
 
-	if n > 0 && t.bytesPerSec > 0 {
-		delay := time.Duration(float64(n)/float64(t.bytesPerSec)) * time.Second
-		if t.jitter > 0 {
-			delay += time.Duration(rand.Int63n(int64(t.jitter)))
-		}
-		time.Sleep(delay)
-	}
+    if t.failureMode != "" && t.failureMode != "normal" && n > 0 {
+        
+        if t.failureMode == "hang_body" && rand.Intn(100) < 1 {
+             select{} 
+        }
 
-	return n, err
+        if t.failureMode == "close_body" && rand.Intn(100) < 1 {
+            return n, io.ErrUnexpectedEOF 
+        }
+    }
+
+    if n > 0 && t.bytesPerSec > 0 {
+        delay := time.Duration(float64(n)/float64(t.bytesPerSec)) * time.Second
+        if t.jitter > 0 {
+            delay += time.Duration(rand.Int63n(int64(t.jitter)))
+        }
+        time.Sleep(delay)
+    }
+
+    return n, err
 }
 
 func (t *ThrottledReadCloser) Close() error {
@@ -89,8 +102,6 @@ func parseToUrl(addr string) *url.URL {
 	return u
 }
 
-// createDynamicProxy now accepts 'isBackendRoute' strictly for ROUTING purposes.
-// Chaos decisions are made inside dynamically based on flags.
 func createDynamicProxy(isBackendRoute bool) *httputil.ReverseProxy {
 	return &httputil.ReverseProxy{
 		Director: func(req *http.Request) {
@@ -98,7 +109,6 @@ func createDynamicProxy(isBackendRoute bool) *httputil.ReverseProxy {
 			cfg := currentConfig
 			configMutex.RUnlock()
 
-			// 1. ROUTING LOGIC
 			var targetStr string
 			if cfg.Mode == ModeUnified {
 				targetStr = cfg.TargetUnified
@@ -115,21 +125,18 @@ func createDynamicProxy(isBackendRoute bool) *httputil.ReverseProxy {
 			}
 			target := parseToUrl(targetStr)
 
-			// 2. REWRITE HEADERS
 			req.URL.Scheme = target.Scheme
 			req.URL.Host = target.Host
 			req.Host = target.Host
 
-			// 4. APPLY REQUEST LAG
-			// REAL upload lag (client → backend)
-if req.Body != nil {
-	req.Body = &ThrottledReadCloser{
-		rc:          req.Body,
-		bytesPerSec: cfg.BandwidthUp * 1024,
-		baseDelay:   time.Duration(cfg.LagToReq) * time.Millisecond,
-		jitter:      time.Duration(cfg.Jitter) * time.Millisecond,
-	}
-}
+			if req.Body != nil {
+				req.Body = &ThrottledReadCloser{
+					rc:          req.Body,
+					bytesPerSec: cfg.BandwidthUp * 1024,
+					baseDelay:   time.Duration(cfg.LagToReq) * time.Millisecond,
+					jitter:      time.Duration(cfg.Jitter) * time.Millisecond,
+				}
+			}
 
 		},
 		ModifyResponse: func(resp *http.Response) error {
@@ -147,14 +154,17 @@ if req.Body != nil {
 
 
 				resp.Header.Set("Access-Control-Allow-Origin", "*")
-
-				// Response Lag
+				lag := cfg.LagToResp
+				if cfg.FailureMode == "timeout" {
+					lag = 60000 // 60 seconds
+				}
 				if resp.Body != nil {
 		resp.Body = &ThrottledReadCloser{
 			rc:          resp.Body,
-			bytesPerSec: cfg.BandwidthDown * 1024,
-			baseDelay:   time.Duration(cfg.LagToResp) * time.Millisecond,
-			jitter:      time.Duration(cfg.Jitter) * time.Millisecond,
+                bytesPerSec: cfg.BandwidthDown * 1024,
+                baseDelay:   time.Duration(lag) * time.Millisecond,
+                jitter:      time.Duration(cfg.Jitter) * time.Millisecond,
+			failureMode: cfg.FailureMode,
 		}
 	}
 			return nil
@@ -163,9 +173,6 @@ if req.Body != nil {
 }
 
 func main() {
-	// 1. Create two proxies.
-	// 'false' = Designed for Frontend Traffic
-	// 'true'  = Designed for Backend Traffic
 	frontendProxy := createDynamicProxy(false)
 	backendProxy := createDynamicProxy(true)
 
@@ -201,7 +208,6 @@ func main() {
 	// --- SERVER 2: CHAOS PROXY (:8080) ---
 	proxyHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 
-		// 🔒 CRITICAL: Read config safely once per request
 		configMutex.RLock()
 		cfg := currentConfig
 		configMutex.RUnlock()
@@ -214,7 +220,6 @@ func main() {
 
 		var writer http.ResponseWriter = w
 
-		// Routing Logic: Backend or Frontend?
 		isBackendRoute := false
 		for _, route := range cfg.ChaosRoutes {
 			if strings.HasPrefix(r.URL.Path, route) {
@@ -233,6 +238,3 @@ func main() {
 	fmt.Println("🚀 Chaos Proxy: http://localhost:8080")
 	log.Fatal(http.ListenAndServe(":8080", proxyHandler))
 }
-
-// apply chaos to all routes don't distinguish between frontend and backend
-// get backend routes to apply backend specific tampering
