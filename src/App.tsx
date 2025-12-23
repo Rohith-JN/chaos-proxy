@@ -14,6 +14,11 @@ interface ProxyConfig {
     LagToReq: number | string;
     LagToResp: number | string;
 
+    bandwidthUp: number | string;
+    bandwidthDown: number | string;
+
+    jitter: number | string;
+
 }
 
 interface ProxyConfigState {
@@ -25,6 +30,11 @@ interface ProxyConfigState {
 
     LagToReq: number | string;
     LagToResp: number | string;
+
+    bandwidthUp: number | string;
+    bandwidthDown: number | string;
+
+    jitter: number | string;
 
 }
 
@@ -38,6 +48,11 @@ const App: React.FC = () => {
 
         LagToReq: 0,
         LagToResp: 0,
+
+        bandwidthUp: 0,
+        bandwidthDown: 0,
+
+        jitter: 0
 
     });
 
@@ -53,7 +68,7 @@ const App: React.FC = () => {
                     const serverConfig = await response.json();
 
                     // Convert array back to string for input field
-                    const routesStr = serverConfig.ChaosRoutes ? serverConfig.ChaosRoutes.join(', ') : '/api';
+                    const routesStr = serverConfig.ChaosRoutes ? serverConfig.ChaosRoutes.join(', ') : '/graphql';
 
                     setConfig(prev => ({
                         ...prev,
@@ -86,6 +101,11 @@ const App: React.FC = () => {
 
                 LagToReq: Number(currentConfig.LagToReq) || 0,
                 LagToResp: Number(currentConfig.LagToResp) || 0,
+
+                bandwidthUp: Number(currentConfig.bandwidthUp) || 0,
+                bandwidthDown: Number(currentConfig.bandwidthDown) || 0,
+
+                jitter: Number(currentConfig.jitter) || 0,
 
             };
 
@@ -209,20 +229,122 @@ const App: React.FC = () => {
 
                     {/* SECTION 2: CHAOS CONTROLS */}
                     <div style={styles.section}>
-                        <div style={styles.sectionTitle}>Network Latency (Asymmetric)</div>
+                        <div style={styles.sectionTitle}>Throttling</div>
+                        <div style={styles.presetButtons}>
+                            <button style={styles.presetBtn} onClick={() => {
+                                setConfig(prev => ({
+                                    ...prev, LagToReq: 0,
+                                    LagToResp: 0,
+
+                                    bandwidthUp: 0,
+                                    bandwidthDown: 0,
+
+                                    jitter: 0
+                                }));
+                                setHasChanges(true);
+
+                                setStatus('⚠️ Unsaved');
+                            }}>Unlimited</button>
+                            <button style={styles.presetBtn} onClick={() => {
+                                setConfig(prev => ({
+                                    ...prev,
+
+                                    // Latency (TTFB)
+                                    LagToReq: 50,
+                                    LagToResp: 80,
+
+                                    // Bandwidth (KB/s)
+                                    bandwidthUp: 750,     // ~6 Mbps
+                                    bandwidthDown: 2000,  // ~16 Mbps
+
+                                    // Jitter
+                                    jitter: 30
+                                }));
+                                setHasChanges(true);
+
+                                setStatus('⚠️ Unsaved');
+
+                            }}>Fast 4G</button>
+                            <button style={styles.presetBtn} onClick={() => {
+                                setConfig(prev => ({
+                                    ...prev,
+
+                                    LagToReq: 150,
+                                    LagToResp: 200,
+
+                                    bandwidthUp: 250,     // ~2 Mbps
+                                    bandwidthDown: 750,   // ~6 Mbps
+
+                                    jitter: 120
+                                }));
+                                setHasChanges(true);
+
+                                setStatus('⚠️ Unsaved');
+
+
+                            }}>Slow 4G</button>
+                            <button style={styles.presetBtn} onClick={() => {
+                                setConfig(prev => ({
+                                    ...prev,
+
+                                    LagToReq: 300,
+                                    LagToResp: 400,
+
+                                    bandwidthUp: 40,      // ~300 kbps
+                                    bandwidthDown: 100,   // ~800 kbps
+
+                                    jitter: 200
+                                }));
+                                setHasChanges(true);
+
+                                setStatus('⚠️ Unsaved');
+
+                            }}>3G</button>
+                            <button style={styles.presetBtn} onClick={() => {
+                                setConfig(prev => ({
+                                    ...prev,
+
+                                    LagToReq: 600,
+                                    LagToResp: 800,
+
+                                    bandwidthUp: 10,      // ~80 kbps
+                                    bandwidthDown: 30,    // ~240 kbps
+
+                                    jitter: 500
+                                }));
+                                setHasChanges(true);
+
+                                setStatus('⚠️ Unsaved');
+
+
+                            }}>EDGE (Extreme)</button>
+                        </div>
 
                         {/* 1. UPLOAD CONTROL */}
                         <div style={{ marginBottom: '15px' }}>
                             {renderControl("Request Delay", "LagToReq", 0, 5000, "ms")}
-                            <div style={styles.hint}>Simulates slow sending (e.g., submitting a form).</div>
+                            <div style={styles.hint}>TTFB (upload)</div>
                         </div>
 
                         {/* 2. DOWNLOAD CONTROL */}
                         <div style={{ marginBottom: '15px' }}>
                             {renderControl("Response Delay", "LagToResp", 0, 5000, "ms")}
-                            <div style={styles.hint}>Simulates slow loading (e.g., images appearing).</div>
+                            <div style={styles.hint}>TTFB (download)</div>
                         </div>
+                        <div style={{ marginBottom: '15px' }}>
+                            {renderControl("Bandwidth Upload", "bandwidthUp", 0, 500000, "bps")}
 
+                            <div style={styles.hint}>Upload bandwidth</div>
+                        </div>
+                        <div style={{ marginBottom: '15px' }}>
+                            {renderControl("Bandwidth Download", "bandwidthDown", 0, 500000, "bps")}
+
+                            <div style={styles.hint}>Download bandwidth</div>
+                        </div>
+                        <div style={{ marginBottom: '15px' }}>
+                            {renderControl("Jitter", "jitter", 0, 500000, "bps")}
+
+                        </div>
                     </div>
                 </div>
 
@@ -329,7 +451,7 @@ const styles: StylesDictionary = {
     slider: { flex: 1, cursor: 'pointer', margin: '0 0 0 10px' },
 
     // Buttons
-    presetButtons: { display: 'flex', gap: '5px', marginBottom: '15px' },
+    presetButtons: { display: 'flex', gap: '5px', marginBottom: '20px' },
     presetBtn: {
         flex: 1, padding: '6px', fontSize: '11px', background: '#333',
         color: '#ccc', border: '1px solid #444', borderRadius: '4px', cursor: 'pointer'
