@@ -156,7 +156,7 @@ func createDynamicProxy(isBackendRoute bool) *httputil.ReverseProxy {
 				resp.Header.Set("Access-Control-Allow-Origin", "*")
 				lag := cfg.LagToResp
 				if cfg.FailureMode == "timeout" {
-					lag = 60000 // 60 seconds
+					lag = 60000 
 				}
 				if resp.Body != nil {
 		resp.Body = &ThrottledReadCloser{
