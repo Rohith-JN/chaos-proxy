@@ -21,8 +21,8 @@ func main() {
 	configStore := config.NewStore()
 
 	// 2. Initialize Proxies (Dependency Injection)
-	frontendProxy := proxy.CreateDynamicProxy(false, configStore)
-	backendProxy := proxy.CreateDynamicProxy(true, configStore)
+	frontendProxy := proxy.ChaosHandler(false, configStore)
+	backendProxy := proxy.ChaosHandler(true, configStore)
 
 	// --- SERVER 1: ADMIN DASHBOARD (:9000) ---
 	go func() {

@@ -15,6 +15,7 @@ interface ProxyConfig {
     bandwidthDown: number | string;
     jitter: number | string;
     failureMode: string;
+    statusRules: StatusRule[];
 }
 
 interface ProxyConfigState {
@@ -29,6 +30,7 @@ interface ProxyConfigState {
     bandwidthDown: number | string;
     jitter: number | string;
     failureMode: string;
+    statusRules: StatusRule[];
 }
 
 interface TrafficLog {
@@ -40,6 +42,13 @@ interface TrafficLog {
     tampered: boolean;
     tamperType?: string; // e.g., "DELAY", "503", "HANG"
     timestamp: string;
+}
+
+interface StatusRule {
+    id: string;
+    pathPattern: string;
+    statusCode: number;
+    errorRate: number;
 }
 
 const App: React.FC = () => {
@@ -55,7 +64,8 @@ const App: React.FC = () => {
         bandwidthUp: 0,
         bandwidthDown: 0,
         jitter: 0,
-        failureMode: 'normal'
+        failureMode: 'normal',
+        statusRules: []
     });
 
     const [status, setStatus] = useState<string>('Connecting...');
@@ -66,7 +76,40 @@ const App: React.FC = () => {
     const [logs, setLogs] = useState<TrafficLog[]>([]);
     const logsEndRef = useRef<HTMLDivElement>(null);
 
-    // --- Effects ---
+    // Helper to add a blank rule
+    const addStatusRule = () => {
+        const newRule: StatusRule = {
+            id: Date.now().toString(),
+            pathPattern: '/api/',
+            statusCode: 500,
+            errorRate: 100
+        };
+        setConfig(prev => ({
+            ...prev,
+            statusRules: [...(prev.statusRules || []), newRule]
+        }));
+        setHasChanges(true);
+    };
+
+    // Helper to remove a rule
+    const removeStatusRule = (id: string) => {
+        setConfig(prev => ({
+            ...prev,
+            statusRules: prev.statusRules.filter(r => r.id !== id)
+        }));
+        setHasChanges(true);
+    };
+
+    // Helper to update a rule field
+    const updateStatusRule = (id: string, field: keyof StatusRule, value: any) => {
+        setConfig(prev => ({
+            ...prev,
+            statusRules: prev.statusRules.map(r =>
+                r.id === id ? { ...r, [field]: value } : r
+            )
+        }));
+        setHasChanges(true);
+    };
 
     // 1. Load Config
     useEffect(() => {
@@ -171,7 +214,8 @@ const App: React.FC = () => {
                 bandwidthUp: Number(currentConfig.bandwidthUp) || 0,
                 bandwidthDown: Number(currentConfig.bandwidthDown) || 0,
                 jitter: Number(currentConfig.jitter) || 0,
-                failureMode: String(currentConfig.failureMode) || 'normal'
+                failureMode: String(currentConfig.failureMode) || 'normal',
+                statusRules: currentConfig.statusRules
             };
 
             const response = await fetch(ADMIN_API_URL, {
@@ -224,7 +268,7 @@ const App: React.FC = () => {
                 <input
                     type="number"
                     name={name}
-                    value={config[name]}
+                    value={config[name] as string | number}
                     onChange={handleChange}
                     style={styles.numInput}
                     min={min} max={max}
@@ -379,12 +423,110 @@ const App: React.FC = () => {
                                 })}
                             </div>
                         </div>
+
+
+                        {/* --- SECTION: STATUS INJECTION --- */}
+                        <div style={styles.section}>
+                            <div style={styles.sectionTitle}>Status Injection</div>
+
+                            {/* Status Code Rules Table */}
+                            <div style={{ background: '#141414', padding: '15px', borderRadius: '6px', border: '1px solid #333' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '10px', alignItems: 'center' }}>
+                                    <span style={{ fontSize: '11px', fontWeight: 'bold', color: '#888' }}>ACTIVE RULES</span>
+                                    <button
+                                        onClick={addStatusRule}
+                                        style={{
+                                            background: '#333', border: '1px solid #444', color: '#f0a500',
+                                            cursor: 'pointer', fontSize: '16px', padding: '2px 8px', borderRadius: '4px',
+                                            lineHeight: '1'
+                                        }}
+                                        title="Add New Rule"
+                                    >
+                                        +
+                                    </button>
+                                </div>
+
+                                {/* Table Header Row */}
+                                <div style={{
+                                    display: 'grid',
+                                    gridTemplateColumns: '3fr 1fr 1fr 30px',
+                                    gap: '10px',
+                                    marginBottom: '5px',
+                                    paddingLeft: '4px'
+                                }}>
+                                    <span style={{ fontSize: '10px', color: '#777', textTransform: 'uppercase' }}>Route Path</span>
+                                    <span style={{ fontSize: '10px', color: '#777', textTransform: 'uppercase' }}>Status</span>
+                                    <span style={{ fontSize: '10px', color: '#777', textTransform: 'uppercase' }}>Rate %</span>
+                                    <span></span>
+                                </div>
+
+                                {(!config.statusRules || config.statusRules.length === 0) && (
+                                    <div style={{ fontSize: '12px', color: '#444', fontStyle: 'italic', textAlign: 'center', padding: '15px', border: '1px dashed #333', borderRadius: '4px' }}>
+                                        No active injection rules.
+                                    </div>
+                                )}
+
+                                {config.statusRules?.map((rule) => (
+                                    <div key={rule.id} style={{
+                                        display: 'grid',
+                                        gridTemplateColumns: '3fr 1fr 1fr 30px',
+                                        gap: '10px',
+                                        marginBottom: '8px',
+                                        alignItems: 'center'
+                                    }}>
+                                        <input
+                                            type="text"
+                                            value={rule.pathPattern}
+                                            onChange={(e) => updateStatusRule(rule.id, 'pathPattern', e.target.value)}
+                                            style={{ ...styles.textInput, padding: '8px', fontSize: '12px', }}
+                                            placeholder="/api/users"
+                                        />
+                                        <input
+                                            type="number"
+                                            value={rule.statusCode}
+                                            onChange={(e) => updateStatusRule(rule.id, 'statusCode', parseInt(e.target.value))}
+                                            style={{ ...styles.numInput, width: '100%', fontSize: '12px', padding: '8px', textAlign: 'left', outline: "none" }}
+                                            placeholder="503"
+                                        />
+                                        <div style={{ display: 'flex', alignItems: 'center', background: '#111', border: '1px solid #444', borderRadius: '4px' }}>
+                                            <input
+                                                type="number"
+                                                value={rule.errorRate}
+                                                onChange={(e) => updateStatusRule(rule.id, 'errorRate', parseInt(e.target.value))}
+                                                style={{ ...styles.numInput, width: '100%', border: 'none', fontSize: '12px', padding: '8px', textAlign: 'left', outline: 'none', borderTopLeftRadius: 0, borderBottomLeftRadius: 0 }}
+                                            />
+                                            <span style={{ fontSize: '11px', color: '#666', paddingRight: '8px' }}>%</span>
+                                        </div>
+
+                                        <button
+                                            onClick={() => removeStatusRule(rule.id)}
+                                            style={{
+                                                background: 'transparent',
+                                                border: 'none',
+                                                color: '#ff4444',
+                                                cursor: 'pointer',
+                                                fontSize: '18px',
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                height: '100%',
+                                                padding: '0'
+                                            }}
+                                            title="Remove Rule"
+                                        >
+                                            ×
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
                     </div>
 
                     {/* COLUMN 3: TRAFFIC MONITOR */}
                     <div style={styles.col}>
-                        <div style={{ ...styles.section, height: '100%', display: 'flex', flexDirection: 'column' }}>
-                            <div style={styles.sectionTitle}>Live Traffic Feed</div>
+                        <div style={{
+                            flexShrink: 0, height: '100%', display: 'flex', flexDirection: 'column'
+                        }}>
                             <div style={styles.monitorContainer}>
                                 {logs.length === 0 && <div style={styles.emptyLog}>Waiting for traffic...</div>}
                                 {logs.map(log => (
@@ -564,6 +706,18 @@ const styles: { [key: string]: CSSProperties } = {
     mainButton: {
         padding: '8px 16px', background: '#222', color: '#fff',
         fontWeight: 'bold', border: 'none', borderRadius: '4px', fontSize: '12px'
+    },
+    checkboxLabel: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: '6px',
+        fontSize: '11px',
+        color: '#ccc',
+        background: '#222',
+        padding: '4px 8px',
+        borderRadius: '4px',
+        cursor: 'pointer',
+        border: '1px solid #333'
     }
 };
 
@@ -575,6 +729,13 @@ const globalStyles = `
   ::-webkit-scrollbar-thumb { background: #333; borderRadius: 4px; }
   ::-webkit-scrollbar-thumb:hover { background: #f0a500; }
   input[type=range] { accent-color: #f0a500; }
+  input[type=number]::-webkit-inner-spin-button, 
+  input[type=number]::-webkit-outer-spin-button { 
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    appearance: none;
+    margin: 0; 
+}
 `;
 
 if (typeof document !== 'undefined') {

@@ -1,7 +1,6 @@
 package config
 
 import (
-	"encoding/json"
 	"sync"
 )
 
@@ -11,6 +10,13 @@ const (
 	ModeSplit   ProxyMode = "split"
 	ModeUnified ProxyMode = "unified"
 )
+
+type StatusRule struct {
+	ID          string `json:"id"`
+	PathPattern string `json:"pathPattern"`
+	StatusCode  int    `json:"statusCode"`
+	ErrorRate   int    `json:"errorRate"` // 0-100
+}
 
 type ProxyConfig struct {
 	Mode           ProxyMode `json:"mode"`
@@ -25,9 +31,10 @@ type ProxyConfig struct {
 	BandwidthDown int `json:"bandwidthDown"`
 	Jitter      int `json:"jitter"`
 	FailureMode string `json:"failureMode"`
+
+	StatusRules []StatusRule `json:"statusRules"`
 }
 
-// Store handles thread-safe access to the config
 type Store struct {
 	mu     sync.RWMutex
 	config ProxyConfig
@@ -36,28 +43,19 @@ type Store struct {
 func NewStore() *Store {
 	return &Store{
 		config: ProxyConfig{
-			Mode: ModeSplit, // Default
+			Mode: ModeSplit, 
 		},
 	}
 }
 
-// Get returns a snapshot of the current config
 func (s *Store) Get() ProxyConfig {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.config
 }
 
-// Update updates the config safely
 func (s *Store) Update(newConfig ProxyConfig) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.config = newConfig
-}
-
-// LoadFromJSON helper for the API
-func (s *Store) LoadFromJSON(data []byte) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return json.Unmarshal(data, &s.config)
 }
