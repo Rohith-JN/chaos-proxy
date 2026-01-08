@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"chaos-proxy/pkg/config"
+	"chaos-proxy/pkg/monitor"
 	"chaos-proxy/pkg/proxy"
 )
 
@@ -44,6 +45,12 @@ func main() {
             // Use the Store to read safely
 			json.NewEncoder(w).Encode(configStore.Get())
 		})
+
+		mux.HandleFunc("/api/activity", func(w http.ResponseWriter, r *http.Request) {
+        w.Header().Set("Access-Control-Allow-Origin", "*")
+        w.Header().Set("Content-Type", "application/json")
+        json.NewEncoder(w).Encode(monitor.GetLogs())
+    })
 
 		// Static Assets
 		distFS, _ := fs.Sub(dashboardAssets, "dist")

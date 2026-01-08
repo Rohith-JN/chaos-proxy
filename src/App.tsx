@@ -141,65 +141,25 @@ const App: React.FC = () => {
         syncWithServer();
     }, []);
 
-    // 2. Mock Traffic Generator (For UI visualization only)
     useEffect(() => {
-        const interval = setInterval(() => {
-            const methods = ['GET', 'POST', 'PUT', 'GET'];
-            const paths = ['/api/users', '/api/orders', '/static/main.js', '/graphql', '/api/auth'];
-            const randomMethod = methods[Math.floor(Math.random() * methods.length)];
-            const randomPath = paths[Math.floor(Math.random() * paths.length)];
-
-            // Simulate chaos based on config
-            const isTampered = Math.random() > 0.6 || config.failureMode !== 'normal';
-            let status = 200;
-            let tamperType = undefined;
-            let duration = Math.floor(Math.random() * 100) + 20;
-
-            if (isTampered) {
-                if (config.failureMode === 'timeout') {
-                    status = 0; // pending
-                    tamperType = 'TIMEOUT';
-                    duration = 60000;
-                } else if (config.failureMode === 'close_body') {
-                    status = 499; // Client Closed
-                    tamperType = 'CUT-OFF';
-                } else if (Number(config.LagToResp) > 0) {
-                    duration += Number(config.LagToResp);
-                    tamperType = `LAG +${config.LagToResp}ms`;
-                } else {
-                    status = 503;
-                    tamperType = 'INJECT 503';
+        const fetchLogs = async () => {
+            try {
+                const res = await fetch('http://localhost:9000/api/activity');
+                if (res.ok) {
+                    const data = await res.json();
+                    setLogs(data);
                 }
+            } catch (e) {
+                console.error("Failed to fetch logs");
             }
+        };
 
-            const newLog: TrafficLog = {
-                id: Date.now(),
-                method: randomMethod,
-                path: randomPath,
-                status: status,
-                duration: duration,
-                tampered: isTampered,
-                tamperType: tamperType,
-                timestamp: new Date().toLocaleTimeString()
-            };
-
-            setLogs(prev => {
-                const updated = [...prev, newLog];
-                if (updated.length > 20) updated.shift(); // Keep last 20
-                return updated;
-            });
-        }, 2000);
+        const interval = setInterval(fetchLogs, 1000);
+        fetchLogs();
 
         return () => clearInterval(interval);
-    }, [config]);
+    }, []);
 
-    // Scroll to bottom of logs
-    useEffect(() => {
-        logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [logs]);
-
-
-    // --- Handlers ---
     const sendConfig = useCallback(async (currentConfig: ProxyConfigState) => {
         setStatus('Syncing...');
         try {
