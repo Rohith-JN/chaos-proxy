@@ -1,8 +1,10 @@
 package proxy
 
 import (
+	"bufio"
 	"fmt"
 	"math/rand"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -27,6 +29,20 @@ type StatusRecorder struct {
 func (r *StatusRecorder) WriteHeader(statusCode int) {
 	r.StatusCode = statusCode
 	r.ResponseWriter.WriteHeader(statusCode)
+}
+
+func (r *StatusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hijacker, ok := r.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, fmt.Errorf("underlying ResponseWriter does not support hijacking")
+	}
+	return hijacker.Hijack()
+}
+
+func (r *StatusRecorder) Flush() {
+	if flusher, ok := r.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
 }
 
 func ChaosHandler(isBackendRoute bool, store *config.Store) http.HandlerFunc {
