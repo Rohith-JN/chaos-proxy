@@ -15,6 +15,7 @@ interface ProxyConfig {
     bandwidthDown: number | string;
     jitter: number | string;
     failureMode: string;
+    headerRules: HeaderRules;
     statusRules: StatusRule[];
 }
 
@@ -30,6 +31,7 @@ interface ProxyConfigState {
     bandwidthDown: number | string;
     jitter: number | string;
     failureMode: string;
+    headerRules: HeaderRules;
     statusRules: StatusRule[];
 }
 
@@ -42,6 +44,12 @@ interface TrafficLog {
     tampered: boolean;
     tamperType?: string; // e.g., "DELAY", "503", "HANG"
     timestamp: string;
+}
+
+interface HeaderRules {
+    stripCORS: boolean;
+    stripCache: boolean;
+    corruptContentType: boolean;
 }
 
 interface StatusRule {
@@ -65,6 +73,7 @@ const App: React.FC = () => {
         bandwidthDown: 0,
         jitter: 0,
         failureMode: 'normal',
+        headerRules: { stripCORS: false, stripCache: false, corruptContentType: false },
         statusRules: []
     });
 
@@ -175,7 +184,8 @@ const App: React.FC = () => {
                 bandwidthDown: Number(currentConfig.bandwidthDown) || 0,
                 jitter: Number(currentConfig.jitter) || 0,
                 failureMode: String(currentConfig.failureMode) || 'normal',
-                statusRules: currentConfig.statusRules
+                statusRules: currentConfig.statusRules,
+                headerRules: currentConfig.headerRules
             };
 
             const response = await fetch(ADMIN_API_URL, {
@@ -341,6 +351,127 @@ const App: React.FC = () => {
                                     setConfig(prev => ({ ...prev, LagToReq: 600, LagToResp: 800, bandwidthUp: 10, bandwidthDown: 30, jitter: 500 }));
                                     setHasChanges(true);
                                 }}>EDGE</button>
+                            </div>
+                        </div>
+                        {/* --- SECTION: HEADER MANIPULATION --- */}
+                        <div style={styles.section}>
+                            <div style={styles.sectionTitle}>Header Tampering</div>
+
+                            <div style={styles.failureGrid}>
+                                {/* 1. NO TAMPERING (Default / Clear All) */}
+                                <div
+                                    onClick={() => {
+                                        setConfig(prev => ({
+                                            ...prev,
+                                            headerRules: {
+                                                stripCORS: false,
+                                                stripCache: false,
+                                                corruptContentType: false
+                                            }
+                                        }));
+                                        setHasChanges(true);
+                                        setStatus('⚠️ Unsaved');
+                                    }}
+                                    style={{
+                                        ...styles.modeCard,
+                                        // Active if ALL flags are false
+                                        ...((!config.headerRules?.stripCORS &&
+                                            !config.headerRules?.stripCache &&
+                                            !config.headerRules?.corruptContentType)
+                                            ? styles.modeCardActive : {})
+                                    }}
+                                >
+                                    <div style={{
+                                        ...styles.modeTitle,
+                                        ...((!config.headerRules?.stripCORS &&
+                                            !config.headerRules?.stripCache &&
+                                            !config.headerRules?.corruptContentType)
+                                            ? styles.modeTitleActive : {})
+                                    }}>
+                                        No Tampering
+                                    </div>
+                                    <div style={styles.modeDesc}>
+                                        Headers are passed through to the client unmodified.
+                                    </div>
+                                </div>
+
+                                {/* 2. STRIP CORS */}
+                                <div
+                                    onClick={() => {
+                                        setConfig(prev => ({
+                                            ...prev,
+                                            headerRules: { ...prev.headerRules, stripCORS: !prev.headerRules.stripCORS }
+                                        }));
+                                        setHasChanges(true);
+                                        setStatus('⚠️ Unsaved');
+                                    }}
+                                    style={{
+                                        ...styles.modeCard,
+                                        ...(config.headerRules?.stripCORS ? styles.modeCardActive : {})
+                                    }}
+                                >
+                                    <div style={{
+                                        ...styles.modeTitle,
+                                        ...(config.headerRules?.stripCORS ? styles.modeTitleActive : {})
+                                    }}>
+                                        Strip CORS
+                                    </div>
+                                    <div style={styles.modeDesc}>
+                                        Removes Access-Control-Allow-Origin headers. Triggers browser security errors.
+                                    </div>
+                                </div>
+
+                                {/* 3. DISABLE CACHE */}
+                                <div
+                                    onClick={() => {
+                                        setConfig(prev => ({
+                                            ...prev,
+                                            headerRules: { ...prev.headerRules, stripCache: !prev.headerRules.stripCache }
+                                        }));
+                                        setHasChanges(true);
+                                        setStatus('⚠️ Unsaved');
+                                    }}
+                                    style={{
+                                        ...styles.modeCard,
+                                        ...(config.headerRules?.stripCache ? styles.modeCardActive : {})
+                                    }}
+                                >
+                                    <div style={{
+                                        ...styles.modeTitle,
+                                        ...(config.headerRules?.stripCache ? styles.modeTitleActive : {})
+                                    }}>
+                                        Disable Cache
+                                    </div>
+                                    <div style={styles.modeDesc}>
+                                        Strips ETag/Last-Modified and forces no-store.
+                                    </div>
+                                </div>
+
+                                {/* 4. CORRUPT CONTENT-TYPE */}
+                                <div
+                                    onClick={() => {
+                                        setConfig(prev => ({
+                                            ...prev,
+                                            headerRules: { ...prev.headerRules, corruptContentType: !prev.headerRules.corruptContentType }
+                                        }));
+                                        setHasChanges(true);
+                                        setStatus('⚠️ Unsaved');
+                                    }}
+                                    style={{
+                                        ...styles.modeCard,
+                                        ...(config.headerRules?.corruptContentType ? styles.modeCardActive : {})
+                                    }}
+                                >
+                                    <div style={{
+                                        ...styles.modeTitle,
+                                        ...(config.headerRules?.corruptContentType ? styles.modeTitleActive : {})
+                                    }}>
+                                        Corrupt Type
+                                    </div>
+                                    <div style={styles.modeDesc}>
+                                        Changes JSON content-type to text/plain or garbage.
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -524,8 +655,8 @@ const App: React.FC = () => {
                         </div>
                     </div>
                 </div>
-            </div>
-        </div>
+            </div >
+        </div >
     );
 };
 

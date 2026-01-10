@@ -18,6 +18,12 @@ type StatusRule struct {
 	ErrorRate   int    `json:"errorRate"` // 0-100
 }
 
+type HeaderRules struct {
+	StripCORS          bool `json:"stripCORS"`
+	StripCache         bool `json:"stripCache"`
+	CorruptContentType bool `json:"corruptContentType"`
+}
+
 type ProxyConfig struct {
 	Mode           ProxyMode `json:"mode"`
 	TargetFrontend string    `json:"targetFrontend"`
@@ -33,6 +39,7 @@ type ProxyConfig struct {
 	FailureMode string `json:"failureMode"`
 
 	StatusRules []StatusRule `json:"statusRules"`
+	HeaderRules    HeaderRules  `json:"headerRules"`
 }
 
 type Store struct {

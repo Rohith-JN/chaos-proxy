@@ -90,6 +90,41 @@ func ChaosHandler(isBackendRoute bool, store *config.Store) http.HandlerFunc {
 				return nil
 			}
 			cfg := store.Get();
+
+
+			// A. Strip CORS (Simulate strict firewall/cross-origin errors)
+			if cfg.HeaderRules.StripCORS {
+				resp.Header.Del("Access-Control-Allow-Origin")
+				resp.Header.Del("Access-Control-Allow-Methods")
+				resp.Header.Del("Access-Control-Allow-Headers")
+				resp.Header.Del("Access-Control-Allow-Credentials")
+			} else {
+				// Default friendly mode: Allow everything
+				// Only set this if the backend didn't already set it
+				if resp.Header.Get("Access-Control-Allow-Origin") == "" {
+					resp.Header.Set("Access-Control-Allow-Origin", "*")
+				}
+			}
+
+			if cfg.HeaderRules.StripCache {
+				// Remove headers that let browsers check for "freshness"
+				resp.Header.Del("ETag")
+				resp.Header.Del("Last-Modified")
+				// Force explicit no-cache instructions
+				resp.Header.Set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+				resp.Header.Set("Pragma", "no-cache")
+				resp.Header.Set("Expires", "0")
+			}
+
+			if cfg.HeaderRules.CorruptContentType {
+				// 50% chance to be text/plain, 50% chance to be garbage
+				if rand.Intn(100) < 50 {
+					resp.Header.Set("Content-Type", "text/plain")
+				} else {
+					resp.Header.Set("Content-Type", "application/broken-octet-stream")
+				}
+			}
+
 			resp.Header.Set("Access-Control-Allow-Origin", "*")
 			lag := cfg.LagToResp
 			if cfg.FailureMode == "timeout" {
@@ -133,24 +168,35 @@ func ChaosHandler(isBackendRoute bool, store *config.Store) http.HandlerFunc {
 			}
 		}
 
-		// 2. IF NOT INJECTED, PROXY IT
 		if !injected {
 			reverseProxy.ServeHTTP(recorder, r)
 		}
 
-		// 3. DETECT OTHER TAMPERING (Post-Calculation)
-		// If we didn't inject, but config has global chaos, mark it
 		if !injected {
-			if cfg.FailureMode != "normal" {
+			if cfg.FailureMode != "normal" && cfg.FailureMode != "" {
 				wasTampered = true
 				tamperType = cfg.FailureMode
-			} else if cfg.LagToResp > 0 {
-				wasTampered = true
-				tamperType = fmt.Sprintf("LAG +%dms", cfg.LagToResp)
-			}
+			} else {
+                isHeaderChaos := cfg.HeaderRules.StripCORS || 
+                                 cfg.HeaderRules.StripCache || 
+                                 cfg.HeaderRules.CorruptContentType
+
+                if isHeaderChaos {
+                    wasTampered = true
+                    tamperType = "HEADER HAX"
+                }
+
+                if cfg.LagToResp > 0 || cfg.LagToReq > 0 {
+                    wasTampered = true
+                    if isHeaderChaos {
+                        tamperType = "LAG + HEADERS"
+                    } else {
+                        tamperType = fmt.Sprintf("LAG +%dms", cfg.LagToResp+cfg.LagToReq)
+                    }
+                }
+            }
 		}
 
-		// 4. LOG IT
 		monitor.AddLog(monitor.LogEntry{
 			ID:         time.Now().UnixNano(),
 			Method:     r.Method,
