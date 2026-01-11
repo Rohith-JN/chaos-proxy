@@ -169,10 +169,6 @@ func ChaosHandler(isBackendRoute bool, store *config.Store) http.HandlerFunc {
 		}
 
 		if !injected {
-			reverseProxy.ServeHTTP(recorder, r)
-		}
-
-		if !injected {
 			if cfg.FailureMode != "normal" && cfg.FailureMode != "" {
 				wasTampered = true
 				tamperType = cfg.FailureMode
@@ -195,6 +191,21 @@ func ChaosHandler(isBackendRoute bool, store *config.Store) http.HandlerFunc {
                     }
                 }
             }
+			for _, rule := range cfg.MockRules {
+				if rule.Active && strings.HasPrefix(r.URL.Path, rule.PathPattern) {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(200) 
+					w.Write([]byte(rule.Body))
+					injected = true
+					wasTampered = true
+					tamperType = "MOCK RESPONSE"
+					break
+				}
+			}
+		}
+
+		if !injected {
+			reverseProxy.ServeHTTP(recorder, r)
 		}
 
 		monitor.AddLog(monitor.LogEntry{

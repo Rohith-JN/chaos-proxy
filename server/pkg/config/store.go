@@ -24,6 +24,13 @@ type HeaderRules struct {
 	CorruptContentType bool `json:"corruptContentType"`
 }
 
+type MockRule struct {
+	ID          string `json:"id"`
+	PathPattern string `json:"pathPattern"` 
+	Body        string `json:"body"`
+	Active      bool   `json:"active"`
+}
+
 type ProxyConfig struct {
 	Mode           ProxyMode `json:"mode"`
 	TargetFrontend string    `json:"targetFrontend"`
@@ -40,6 +47,7 @@ type ProxyConfig struct {
 
 	StatusRules []StatusRule `json:"statusRules"`
 	HeaderRules    HeaderRules  `json:"headerRules"`
+	MockRules   []MockRule   `json:"mockRules"`
 }
 
 type Store struct {

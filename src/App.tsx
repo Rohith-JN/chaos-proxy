@@ -17,6 +17,7 @@ interface ProxyConfig {
     failureMode: string;
     headerRules: HeaderRules;
     statusRules: StatusRule[];
+    mockRules: MockRule[];
 }
 
 interface ProxyConfigState {
@@ -33,6 +34,7 @@ interface ProxyConfigState {
     failureMode: string;
     headerRules: HeaderRules;
     statusRules: StatusRule[];
+    mockRules: MockRule[];
 }
 
 interface TrafficLog {
@@ -59,8 +61,14 @@ interface StatusRule {
     errorRate: number;
 }
 
+interface MockRule {
+    id: string;
+    pathPattern: string;
+    body: string;
+    active: boolean;
+}
+
 const App: React.FC = () => {
-    // --- State ---
     const [config, setConfig] = useState<ProxyConfigState>({
         Mode: 'split',
         TargetFrontend: 'http://localhost:3000',
@@ -74,18 +82,44 @@ const App: React.FC = () => {
         jitter: 0,
         failureMode: 'normal',
         headerRules: { stripCORS: false, stripCache: false, corruptContentType: false },
-        statusRules: []
+        statusRules: [],
+        mockRules: []
     });
 
     const [status, setStatus] = useState<string>('Connecting...');
     const [hasChanges, setHasChanges] = useState<boolean>(false);
     const [throttleMode, setThrottleMode] = useState<string>('unlimited');
 
-    // Traffic Log State (Mocked for UI layout)
     const [logs, setLogs] = useState<TrafficLog[]>([]);
     const logsEndRef = useRef<HTMLDivElement>(null);
 
-    // Helper to add a blank rule
+    const addMockRule = () => {
+        const newRule: MockRule = {
+            id: Date.now().toString(),
+            pathPattern: "",
+            body: '{\n  "status": "ok",\n  "data": []\n}',
+            active: true
+        };
+        setConfig(prev => ({ ...prev, mockRules: [...(prev.mockRules || []), newRule] }));
+        setHasChanges(true);
+    };
+
+    const updateMockRule = (id: string, field: keyof MockRule, value: any) => {
+        setConfig(prev => ({
+            ...prev,
+            mockRules: prev.mockRules.map(r => r.id === id ? { ...r, [field]: value } : r)
+        }));
+        setHasChanges(true);
+    };
+
+    const removeMockRule = (id: string) => {
+        setConfig(prev => ({
+            ...prev,
+            mockRules: prev.mockRules.filter(r => r.id !== id)
+        }));
+        setHasChanges(true);
+    };
+
     const addStatusRule = () => {
         const newRule: StatusRule = {
             id: Date.now().toString(),
@@ -100,7 +134,6 @@ const App: React.FC = () => {
         setHasChanges(true);
     };
 
-    // Helper to remove a rule
     const removeStatusRule = (id: string) => {
         setConfig(prev => ({
             ...prev,
@@ -109,7 +142,6 @@ const App: React.FC = () => {
         setHasChanges(true);
     };
 
-    // Helper to update a rule field
     const updateStatusRule = (id: string, field: keyof StatusRule, value: any) => {
         setConfig(prev => ({
             ...prev,
@@ -120,7 +152,6 @@ const App: React.FC = () => {
         setHasChanges(true);
     };
 
-    // 1. Load Config
     useEffect(() => {
         const syncWithServer = async () => {
             try {
@@ -185,7 +216,8 @@ const App: React.FC = () => {
                 jitter: Number(currentConfig.jitter) || 0,
                 failureMode: String(currentConfig.failureMode) || 'normal',
                 statusRules: currentConfig.statusRules,
-                headerRules: currentConfig.headerRules
+                headerRules: currentConfig.headerRules,
+                mockRules: currentConfig.mockRules
             };
 
             const response = await fetch(ADMIN_API_URL, {
@@ -607,6 +639,81 @@ const App: React.FC = () => {
                                         >
                                             ×
                                         </button>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                        {/* --- SECTION: RESPONSE MOCKING --- */}
+                        <div style={styles.section}>
+                            <div style={styles.sectionTitle}>Response Body Mocking</div>
+
+                            <div style={{ background: '#141414', padding: '15px', borderRadius: '6px', border: '1px solid #333' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '15px', alignItems: 'center' }}>
+                                    <span style={{ fontSize: '11px', fontWeight: 'bold', color: '#888' }}>ACTIVE MOCKS</span>
+                                    <button
+                                        onClick={addMockRule}
+                                        style={{
+                                            background: '#333', border: '1px solid #444', color: '#f0a500',
+                                            cursor: 'pointer', fontSize: '16px', padding: '2px 8px', borderRadius: '4px',
+                                            lineHeight: '1'
+                                        }}
+                                        title="Add Mock Rule"
+                                    >
+                                        +
+                                    </button>
+                                </div>
+
+                                {(!config.mockRules || config.mockRules.length === 0) && (
+                                    <div style={{ fontSize: '12px', color: '#444', fontStyle: 'italic', textAlign: 'center', padding: '15px', border: '1px dashed #333', borderRadius: '4px' }}>
+                                        No active mock rules.
+                                    </div>
+                                )}
+
+                                {config.mockRules?.map((rule) => (
+                                    <div key={rule.id} style={{
+                                        marginBottom: '15px',
+                                        borderBottom: '1px solid #222',
+                                        paddingBottom: '15px'
+                                    }}>
+                                        {/* Row 1: Route + Controls */}
+                                        <div style={{ display: 'flex', gap: '10px', marginBottom: '8px', alignItems: 'center' }}>
+                                            <input
+                                                type="text"
+                                                value={rule.pathPattern}
+                                                onChange={(e) => updateMockRule(rule.id, 'pathPattern', e.target.value)}
+                                                style={{ ...styles.textInput, flex: 1, padding: '8px', fontSize: '12px', color: 'white' }}
+                                                placeholder="/api/v1/user/profile"
+                                            />
+
+                                            <button
+                                                onClick={() => removeMockRule(rule.id)}
+                                                style={{ background: 'transparent', border: 'none', color: '#ff4444', cursor: 'pointer', fontSize: '18px' }}
+                                                title="Remove"
+                                            >
+                                                ×
+                                            </button>
+                                        </div>
+
+                                        {/* Row 2: JSON Body Textarea */}
+                                        <textarea
+                                            value={rule.body}
+                                            onChange={(e) => updateMockRule(rule.id, 'body', e.target.value)}
+                                            style={{
+                                                width: '100%',
+                                                background: '#0a0a0a',
+                                                boxSizing: 'border-box',
+                                                color: '#f0a500',
+                                                border: '1px solid #333',
+                                                borderRadius: '4px',
+                                                fontFamily: 'monospace',
+                                                fontSize: '11px',
+                                                padding: '8px',
+                                                minHeight: '80px',
+                                                resize: 'vertical'
+                                            }}
+                                            spellCheck={false}
+                                            placeholder='{"status": "ok"}'
+                                        />
                                     </div>
                                 ))}
                             </div>
