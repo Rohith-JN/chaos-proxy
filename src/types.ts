@@ -21,11 +21,11 @@ interface ProxyConfigState {
   TargetBackend: string;
   TargetUnified: string;
   ChaosRoutes: string;
-  LagToReq: number | string;
-  LagToResp: number | string;
-  bandwidthUp: number | string;
-  bandwidthDown: number | string;
-  jitter: number | string;
+  LagToReq: number;
+  LagToResp: number;
+  bandwidthUp: number;
+  bandwidthDown: number;
+  jitter: number;
   failureMode: string;
   headerRules: HeaderRules;
   statusRules: StatusRule[];

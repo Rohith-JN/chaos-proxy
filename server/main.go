@@ -39,7 +39,7 @@ func main() {
 				var newCfg config.ProxyConfig
 				json.NewDecoder(r.Body).Decode(&newCfg)
 				configStore.Update(newCfg)
-				fmt.Printf("Updated Config")
+				fmt.Printf("Updated Config\n")
 			}
             
             // Use the Store to read safely
